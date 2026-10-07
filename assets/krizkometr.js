@@ -1,0 +1,898 @@
+/* Křížkometr – průzkumník přeskakování v komunálních volbách. Institut H21.
+   Jeden skript pro všechny stránky: vykreslí se to, co stránka obsahuje. */
+(function(){
+"use strict";
+// ------------------------------------------------------------- nastavení
+// VERZE: po každé výměně souborů v data/ ji změňte (a totéž číslo v odkazech
+// na skript a styly v HTML), jinak můžou prohlížeče chvíli držet stará data
+const VERZE="2026-10-07";
+const ASSETS=new URL(".",(document.currentScript&&document.currentScript.src)||location.href);
+const DATA_URL=new URL("../data/",ASSETS);
+const SOUBORY={vysledky:"vysledky.bin",jmena:"jmena.bin",kandidatky:"kandidatky.bin",anekdoty:"anekdoty.json"};
+const VIEW=document.body.dataset.view||"vse";   // vse | pruzkumnik | grafy | kandidatka
+let META=null,D=null,anecOpen=false,searchRefresh=null,anecMode="weak",anecIdx=0,booted=false;
+// jména leží ve zvláštním souboru; stáhnou se teprve, když si je někdo vyžádá
+let NAMES=null,namesPromise=null,namesFailed=false;
+// plné názvy kandidátek z registru ČSÚ a krátké štítky do tlačítek
+let LISTS=null,listsPromise=null;
+let CUR=[],PASS=null;          // ručně vybrané anekdoty; které kandidátky prošly filtry
+const BANDS=[[0,200],[200,500],[500,1000],[1000,2000],[2000,5000],[5000,10000],
+             [10000,20000],[20000,50000],[50000,150000],[150000,1000000],[1000000,1e9]];
+const BLAB=["do 199","200–499","500–999","1 000–1 999","2 000–4 999","5 000–9 999",
+            "10 000–19 999","20 000–49 999","50 000–149 999","150 tis.–1 mil.","nad 1 mil."];
+const NB=BANDS.length;
+const fmt=new Intl.NumberFormat("cs-CZ");
+const pc=x=>(Math.round(x*10)/10).toLocaleString("cs-CZ",{minimumFractionDigits:1,maximumFractionDigits:1});
+const $=id=>document.getElementById(id);
+
+function b64(s){const b=atob(s),n=b.length,o=new Uint8Array(n);for(let i=0;i<n;i++)o[i]=b.charCodeAt(i);return o;}
+async function gunzip(by){const st=new Blob([by]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return new Uint8Array(await new Response(st).arrayBuffer());}
+// GitHub Pages posílá .bin tak, jak leží; soubory jsou zabalené gzipem
+async function fetchBytes(name){
+  const r=await fetch(new URL(name+"?v="+VERZE,DATA_URL));
+  if(!r.ok)throw new Error(name+": "+r.status);
+  const b=new Uint8Array(await r.arrayBuffer());
+  return (b[0]===0x1f&&b[1]===0x8b)?gunzip(b):b;
+}
+function parse(raw){
+  let dv=new DataView(raw.buffer,raw.byteOffset,raw.byteLength);
+  const ml=dv.getUint32(0,true);
+  META=JSON.parse(new TextDecoder().decode(new Uint8Array(raw.buffer,raw.byteOffset+4,ml)));
+  const buf=raw.subarray(4+ml);
+  dv=new DataView(buf.buffer,buf.byteOffset,buf.byteLength);
+  const L=dv.getUint32(0,true),N=dv.getUint32(4,true);let o=8;
+  const u8=k=>{const a=new Uint8Array(buf.buffer,buf.byteOffset+o,k);o+=k;return a;};
+  const cp=(k,T,w)=>{const a=new T(buf.slice(o,o+k*w).buffer);o+=k*w;return a;};
+  const pl=k=>{ // uint32 stored as four byte planes
+    const a=new Uint32Array(k),b0=o,b1=o+k,b2=o+2*k,b3=o+3*k;
+    for(let i=0;i<k;i++)a[i]=buf[b0+i]|(buf[b1+i]<<8)|(buf[b2+i]<<16)|(buf[b3+i]*16777216);
+    o+=4*k;return a;};
+  const yr=u8(L),mand=u8(L),seats=u8(L),n=u8(L);
+  const mi=cp(L,Uint16Array,2);
+  const pop=cp(L,Uint32Array,4),mask=cp(L,Uint32Array,4),pv=pl(L);
+  const pos=u8(N),votes=pl(N);
+  const off=new Uint32Array(L);
+  for(let i=0,a=0;i<L;i++){off[i]=a;a+=n[i];}
+  const nb=(N+7)>>3;
+  const bEl=u8(nb),bOr=u8(nb),bCl=u8(nb),bBe=u8(nb),bHi=u8(nb);
+  let k=dv.getUint32(o,true);o+=4;
+  const names=new TextDecoder().decode(new Uint8Array(buf.buffer,buf.byteOffset+o,k)).split("\n");o+=k;
+  k=dv.getUint32(o,true);o+=4;
+  const abbr=new TextDecoder().decode(new Uint8Array(buf.buffer,buf.byteOffset+o,k)).split("\n");o+=k;
+  const M=dv.getUint32(o,true);o+=4;
+  const mcode=cp(M,Uint32Array,4),mward=u8(M),mokr=u8(M),mtyp=u8(M);
+  return {L,N,yr,mand,seats,n,mi,pop,mask,pv,off,pos,votes,bEl,bOr,bCl,bBe,bHi,
+          names,abbr,mcode,mward,mokr,mtyp};
+}
+const bit=(a,i)=>(a[i>>3]>>(i&7))&1;
+
+// soubor se jmény se stahuje vždy, ale až potom, co je stránka vykreslená,
+// takže se na něj nikdo nečeká; na úsporném připojení se vynechá
+function prefetchNames(){
+  const c=navigator.connection;
+  if(c&&(c.saveData||/(^|-)2g$/.test(c.effectiveType||"")))return;
+  const go=()=>{ensureLists();ensureNames();};
+  if("requestIdleCallback" in window)requestIdleCallback(go,{timeout:2500});
+  else setTimeout(go,400);
+}
+function ensureNames(force){
+  if(namesPromise) return namesPromise;
+  if(namesFailed&&!force) return null;
+  namesFailed=false;
+  namesPromise=loadNames().then(()=>{render();if(searchRefresh)searchRefresh();});
+  return namesPromise;
+}
+let inlineWait=null;
+window.__onNames=()=>{if(inlineWait){const f=inlineWait;inlineWait=null;f();}};
+function namesBytes(){
+  if(!window.__NINLINE) return fetchBytes(SOUBORY.jmena);
+  const take=()=>{const b=b64(window.__N);delete window.__N;return gunzip(b);};
+  return window.__N?take():new Promise(res=>{inlineWait=()=>res(take());});
+}
+async function loadNames(){
+  try{
+    const raw=await namesBytes();
+    const dv=new DataView(raw.buffer,raw.byteOffset,raw.byteLength);
+    const n=dv.getUint32(0,true),ls=dv.getUint32(8,true),lg=dv.getUint32(12,true);
+    let o=16;
+    const td=new TextDecoder();
+    const sur=td.decode(new Uint8Array(raw.buffer,raw.byteOffset+o,ls)).split("\n");o+=ls;
+    const giv=td.decode(new Uint8Array(raw.buffer,raw.byteOffset+o,lg)).split("\n");o+=lg;
+    const pl=k=>{const a=new Uint32Array(k),b0=o,b1=o+k,b2=o+2*k,b3=o+3*k;
+      for(let i=0;i<k;i++)a[i]=raw[b0+i]|(raw[b1+i]<<8)|(raw[b2+i]<<16)|(raw[b3+i]*16777216);
+      o+=4*k;return a;};
+    const si=pl(n),gi=pl(n);
+    NAMES={of:ix=>((sur[si[ix]]||"")+" "+(giv[gi[ix]]||"")).trim()};
+  }catch(e){ namesPromise=null; namesFailed=true; }
+}
+function ensureLists(){
+  if(LISTS||listsPromise) return listsPromise;
+  const src=window.__K?gunzip(b64(window.__K)):fetchBytes(SOUBORY.kandidatky);
+  listsPromise=Promise.resolve(src).then(raw=>{
+    const j=JSON.parse(new TextDecoder().decode(raw));delete window.__K;
+    LISTS={full:l=>j.f[j.fi[l]]||"",
+           lab:l=>{const s=j.si[l];return s===-1?"":s===-2?j.f[j.fi[l]]:j.s[s];}};
+    render();
+  }).catch(()=>{listsPromise=null;});
+  return listsPromise;
+}
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+// odstavce oddělené prázdným řádkem, **tučně**
+// pevné mezery: tisíce se neroztrhnou a jednopísmenné předložky nezůstanou na konci řádku
+const nb=s=>s.replace(/(\d) (?=\d{3}\b)/g,"$1\u00a0").replace(/(?<=^|\s)([vkszouaiVKSZOUAI]) /g,"$1\u00a0");
+const txt=s=>String(s).split(/\n\s*\n/).map(p=>"<p>"+nb(esc(p.trim())).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>")+"</p>").join("");
+// tlačítko kandidátky: zkratka, a kde se v obci opakuje (SNK, NK…), i kus vlastního názvu
+function listChip(l,i){
+  const a=D.abbr[l],lab=LISTS?LISTS.lab(l):"";
+  if(!lab) return esc(a||"kandidátka "+(i+1));
+  return a?`${esc(a)} <span class="cn">${esc(lab)}</span>`:`<span class="cn">${esc(lab)}</span>`;
+}
+function listInline(l){
+  const a=D.abbr[l]||"",lab=LISTS?LISTS.lab(l):"";
+  return lab?(a?`${esc(a)} (${esc(lab)})`:esc(lab)):esc(a||"–");
+}
+function listName(l){                // zkratka a plný název, pokud říká něco navíc
+  const a=D.abbr[l]||"",f=LISTS?LISTS.full(l):"";
+  if(!f||f.toLowerCase()===a.toLowerCase()) return `<b>${esc(a||"–")}</b>`;
+  return a?`<b>${esc(a)}</b> – ${esc(f)}`:`<b>${esc(f)}</b>`;
+}
+// 593 názvů obcí sdílí 1 509 obcí, takže samotný název neidentifikuje;
+// u Prahy by se okres s názvem opakoval, proto se vynechá
+const okrOf=mi=>{const o=META.okresy[D.mokr[mi]][0],n=D.names[mi];
+  return (n===o||n.startsWith(o+" ")||n.startsWith(o+"-"))?"":o;};
+const okrSuf=mi=>{const o=okrOf(mi);return o?", okres "+o:"";};
+let nRivals=null;                       // počet kandidátek, které spolu v obci soupeřily
+function countRivals(){
+  const cnt=new Map();
+  for(let l=0;l<D.L;l++){const k=D.mi[l]*8+D.yr[l];cnt.set(k,(cnt.get(k)||0)+1);}
+  nRivals=new Uint8Array(D.L);
+  for(let l=0;l<D.L;l++)nRivals[l]=Math.min(255,cnt.get(D.mi[l]*8+D.yr[l]));
+}
+const RIV=[["jediná",1,1],["2",2,2],["3",3,3],["4–5",4,5],["6–10",6,10],["11 a víc",11,255]];
+let splitCY=null;                       // "kód obce_rok" voleb dělených na obvody
+function findSplits(){
+  const byCY=new Map();
+  for(let l=0;l<D.L;l++){
+    const k=D.mcode[D.mi[l]]+"_"+D.yr[l];
+    let st=byCY.get(k);if(!st){st=new Set();byCY.set(k,st);}
+    st.add(D.mi[l]);
+  }
+  splitCY=new Set();
+  byCY.forEach((st,k)=>{if(st.size>1)splitCY.add(k);});
+}
+const isSplit=l=>splitCY.has(D.mcode[D.mi[l]]+"_"+D.yr[l]);
+const avgOf=l=>D.pv[l]/Math.max(1,D.n[l]);
+const thrOf=l=>{const a=Math.floor(avgOf(l));return a+a/10;};
+
+// empty set = no restriction, so every filter is "pick none or pick several"
+// místo na kandidátce je buď/anebo: uplatní se jen režim, který je zapnutý
+const S={years:new Set(),bands:new Set(),tags:new Set(),kraje:new Set(),okresy:new Set(),
+         typy:new Set(),rivals:new Set(),posMode:"abs",absLo:1,absHi:70,relLo:0,relHi:100};
+// okres je přesnější než kraj, takže když je vybraný, kraj se už neuplatňuje
+const regTxt=()=>{
+  if(!S.kraje.size) return "celá ČR";
+  const parts=[...S.kraje].sort((a,b)=>META.kraje[a].localeCompare(META.kraje[b],"cs")).map(k=>{
+    const os=[...S.okresy].filter(i=>META.okresy[i][1]===k)
+      .map(i=>META.okresy[i][0]).sort((a,b)=>a.localeCompare(b,"cs"));
+    return os.length?os.join(", "):META.kraje[k];
+  });
+  const t=parts.join(", ");
+  return t.length>42?parts.length+" oblastí":t;
+};
+const posAll=()=>S.posMode==="abs"?(S.absLo===1&&S.absHi>=70):(S.relLo===0&&S.relHi===100);
+const posTxt=()=>posAll()?"vše":(S.posMode==="abs"
+  ?`${S.absLo}. až ${S.absHi}. místo`:`${S.relLo} – ${S.relHi} % délky`);
+const bandOf=p=>{let i=0;while(i<NB-1&&p>=BANDS[i][1])i++;return i;};
+// sousedící pásma se slijí do jednoho rozsahu: 1 000–1 999 + 2 000–4 999 +
+// 5 000–9 999 se vypíše jako "1 000–9 999", ne jako "3 pásma"
+function bandsTxt(){
+  if(!S.bands.size) return "vše";
+  const ix=[...S.bands].sort((a,b)=>a-b),runs=[];
+  let a=ix[0],prev=ix[0];
+  for(let k=1;k<=ix.length;k++){
+    if(k<ix.length&&ix[k]===prev+1){prev=ix[k];continue;}
+    runs.push([a,prev]);
+    if(k<ix.length){a=ix[k];prev=ix[k];}
+  }
+  const one=([x,y])=>{
+    if(x===0&&y===NB-1) return "vše";
+    if(x===y) return BLAB[x];
+    if(x===0) return "do "+fmt.format(BANDS[y][1]-1);
+    if(y===NB-1) return fmt.format(BANDS[x][0])+" a víc";
+    return fmt.format(BANDS[x][0])+"–"+fmt.format(BANDS[y][1]-1);
+  };
+  return runs.length>3?runs.length+" rozsahů":runs.map(one).join(", ");
+}
+
+/* ------------------------------------------------------------------ scan */
+function scan(){
+  const {L,seats,n,mi,pop,mask,off,pos,votes,bEl,bOr,bCl,bBe,bHi}=D;
+  const tm=[...S.tags].reduce((a,t)=>a|(1<<META.tags.indexOf(t)),0);
+  const anyY=S.years.size===0,anyB=S.bands.size===0;
+  const anyR=S.kraje.size===0;
+  // okres zužuje jen svůj kraj; ostatní vybrané kraje zůstávají celé
+  const okInKraj=new Uint8Array(META.kraje.length);
+  S.okresy.forEach(o=>okInKraj[META.okresy[o][1]]=1);
+  const anyT=S.typy.size===0,anyRiv=S.rivals.size===0;
+  const byAbs=S.posMode==="abs";
+  const aLo=byAbs?S.absLo:1,aHi=byAbs?S.absHi:70;
+  const rLo=byAbs?0:S.relLo/100,rHi=byAbs?1:S.relHi/100;
+  const allPos=posAll();
+  const R={cand:0,el:0,jump:0,idle:0,beat:0,cl:0,high:0,noSeat:0,short:0,
+           elBelow:0,needed:0,beatLists:0,seatLists:0,munis:new Set()};
+  const B={m:new Float64Array(NB),d:new Float64Array(NB)};
+  const EX=[];                              // všechny paradoxy ve výběru
+  if(!PASS||PASS.length!==L)PASS=new Uint8Array(L);else PASS.fill(0);
+  for(let l=0;l<L;l++){
+    if(tm&&!(tm&mask[l]))continue;
+    const ln=n[l];if(!ln)continue;
+    if(!anyY&&!S.years.has(D.yr[l]))continue;
+    const mIdx=D.mi[l];
+    if(!anyT&&!S.typy.has(D.mtyp[mIdx]))continue;
+    if(!anyRiv){const r=nRivals[l];
+      let hit=false;S.rivals.forEach(i=>{if(r>=RIV[i][1]&&r<=RIV[i][2])hit=true;});
+      if(!hit)continue;}
+    if(!anyR){const ok=D.mokr[mIdx],kr=META.okresy[ok][1];
+      if(!S.kraje.has(kr))continue;
+      if(okInKraj[kr]&&!S.okresy.has(ok))continue;}
+    const P0=pop[l],o=off[l],den=ln>1?ln-1:1,av=avgOf(l);
+    const bi=bandOf(P0),inPop=anyB||S.bands.has(bi);
+    let cand=0,el=0,jump=0,idle=0,cl=0,high=0,beat=0,noSeat=0,shortf=0,elBelow=0,needed=0;
+    // kolik skokanů je na kandidátce celkem a kolik neskokanů leží před
+    // daným místem – z toho plyne, kam by kandidát spadl, kdyby nepřeskočil on
+    let C=0;for(let i=0;i<ln;i++)if(bit(bCl,o+i))C++;
+    let nb=0;
+    for(let i=0;i<ln;i++){
+      const ix=o+i;
+      const cPre=bit(bCl,ix);
+      const nbHere=nb; if(!cPre)nb++;          // neskokani před ním, v pořadí na lístku
+      if(!allPos){const ap=pos[ix];if(ap<aLo||ap>aHi)continue;
+        const rp=ln>1?i/den:0;if(rp<rLo-1e-9||rp>rHi+1e-9)continue;}
+      const e=bit(bEl,ix),oo=bit(bOr,ix),c=cPre,be=bit(bBe,ix),hi=bit(bHi,ix);
+      cand++;
+      if(c){cl++;
+        if(e){ if(oo){idle++; if((C-1)+nbHere+1>seats[l])needed++;} else jump++; }
+        else if(seats[l]===0)noSeat++;else shortf++;}
+      else if(hi)high++;
+      if(e){el++;if(!c&&!hi)elBelow++;}
+      if(be)beat++;
+    }
+    if(!cand)continue;
+    B.m[bi]+=el;B.d[bi]+=jump;
+    if(!inPop)continue;
+    R.cand+=cand;R.el+=el;R.jump+=jump;R.idle+=idle;R.cl+=cl;R.high+=high;R.beat+=beat;
+    R.noSeat+=noSeat;R.short+=shortf;R.elBelow+=elBelow;R.needed+=needed;
+    if(seats[l]>0){R.seatLists++;if(beat>0)R.beatLists++;}
+    R.munis.add(mi[l]);PASS[l]=1;
+    // anecdote: worst-ranked elected vs best-ranked unelected ON THE SAME LIST,
+    // ignoring the position filters (the pair is a comparison of two positions)
+    let wEl=-1,bNe=-1;
+    for(let i=0;i<ln;i++){
+      const ix=o+i;
+      if(bit(bEl,ix)){if(wEl<0||votes[ix]<votes[wEl])wEl=ix;}
+      else {if(bNe<0||votes[ix]>votes[bNe])bNe=ix;}
+    }
+    // jen skutečné paradoxy: nezvolený má víc hlasů než zvolený z téže listiny
+    if(wEl>=0&&bNe>=0&&votes[bNe]>votes[wEl])
+      EX.push({l,iEl:wEl,iNe:bNe,r:votes[wEl]/Math.max(av,1e-9),gap:votes[bNe]-votes[wEl]});
+  }
+  EX.sort(anecMode==="gap"?(x,y)=>y.gap-x.gap||x.r-y.r:(x,y)=>x.r-y.r||y.gap-x.gap);
+  return {R,B,EX};
+}
+
+/* ------------------------------------------------- list breakdown (shared) */
+function listTable(l,marks){
+  if(!LISTS)ensureLists();
+  const {off,n,pos,votes,seats,bEl,bOr,bCl,mi,abbr,names,pop,mand}=D;
+  const ln=n[l],av=avgOf(l),thr=thrOf(l),o=off[l];
+  let rows="";
+  for(let i=0;i<ln;i++){
+    const ix=o+i,e=bit(bEl,ix),c=bit(bCl,ix);
+    const cls=(marks&&marks.has(ix))?"mark":(e?"in":"");
+    const nm=NAMES?`<small>${NAMES.of(ix)||"–"}</small>`:"";
+    rows+=`<tr class="${cls}"><td>${pos[ix]}.${nm}</td><td>${fmt.format(votes[ix])}</td>`
+      +`<td>${Math.round(100*votes[ix]/Math.max(av,1e-9))} %</td>`
+      +`<td class="${c?"yes":"no"}">${c?"ano":"ne"}</td>`
+      +`<td class="${e?"yes":"no"}">${e?"ano":"ne"}</td></tr>`;
+  }
+  return `<p class="lmeta"><b>${names[mi[l]]}</b>${okrSuf(mi[l])} · volby ${META.years[D.yr[l]]} · `
+    +`${fmt.format(pop[l])} obyvatel · `
+    +(isSplit(l)?`volební obvod ${D.mward[mi[l]]}, ${mand[l]} ${md(mand[l])} · `
+                :`zastupitelstvo o ${mand[l]} členech · `)
+    +`kandidátka ${listName(l)}</p>`
+    +`<p class="lmeta">${fmt.format(D.pv[l])} hlasů na ${ln} kandidátů · průměr `
+    +`${av.toLocaleString("cs-CZ",{maximumFractionDigits:2})}, hranice `
+    +`${thr.toLocaleString("cs-CZ",{maximumFractionDigits:1})} ${Number.isInteger(thr)?hl(thr):"hlasu"} · získala ${seats[l]} ${md(seats[l])}</p>`
+    +`<table class="lt"><thead><tr><th>Místo</th><th>Hlasů</th>`
+    +`<th><span class="term" data-tip="Hlasy kandidáta v poměru k průměru na jednoho kandidáta téže kandidátky.">% průměru</span></th>`
+    +`<th><span class="term" data-tip="Dosáhl na hranici pro přeskočení, tedy na celou část průměru zvýšenou o desetinu. Není to přesně 110 % ze sloupce vlevo, proto hranici překročí i kandidát se 105 %.">Nad hranicí</span></th>`
+    +`<th>Zvolen</th></tr></thead><tbody>${rows}</tbody></table>`
+    +`<div class="story">${listStory(l)}</div>`;
+}
+function listStory(l){
+  const {off,n,pos,votes,seats,bEl,bOr,bCl}=D;
+  const ln=n[l],o=off[l],M=seats[l],thr=thrOf(l);
+  if(M===0) return "Kandidátka nezískala žádný mandát, takže se pořadí na ní vůbec nestanovovalo. "
+    +"Sloupec „nad hranicí“ je tu jen pro srovnání – na nic neměl vliv.";
+  let cl=0,clUnder=0,moved=0,wEl=-1,bNe=-1;
+  for(let i=0;i<ln;i++){
+    const ix=o+i;
+    if(bit(bCl,ix)){cl++;if(!bit(bOr,ix))clUnder++;}
+    if(bit(bEl,ix)&&!bit(bOr,ix))moved++;
+    if(bit(bEl,ix)){if(wEl<0||votes[ix]<votes[wEl])wEl=ix;}
+    else if(bNe<0||votes[ix]>votes[bNe])bNe=ix;
+  }
+  let s="";
+  const thrTxt=thr.toLocaleString("cs-CZ",{maximumFractionDigits:1});
+  // „11 hlasu“ je špatně; celé číslo vyjde, když je celá část průměru dělitelná deseti
+  const thrJ=Number.isInteger(thr)?hl(thr):"hlasu";
+  const vic=cl>M?` Hranici přitom překročilo víc kandidátů, než kolik kandidátka získala mandátů, takže mezi nimi rozhodl počet hlasů.`:"";
+  if(M>=ln) s=`Kandidátka získala tolik mandátů, kolik měla kandidátů. Zvoleni proto byli všichni a na pořadí vůbec nezáleželo.`;
+  else if(cl===0) s=`Hranici ${thrTxt} ${thrJ} nepřekročil nikdo. Mandáty proto připadly ${M===1?"prvnímu místu":"prvním "+M+" místům"} v pořadí, které sestavila kandidátka, a na počtech hlasů nezáleželo.`;
+  else if(moved>0){
+    const kolik=moved===clUnder
+      ? `takže ${moved===1?"jeden mandát změnil":fmt.format(moved)+" "+md(moved)+" "+pl(moved,"změnil","změnily","změnilo")} majitele`
+      : `na mandát ${moved===1?"z nich ale dosáhl jen jeden":"z nich ale dosáhli jen "+fmt.format(moved)}, takže tolik mandátů změnilo majitele`;
+    s=`Hranici ${prek(cl)} ${cl} ${kand(cl)}, z toho ${clUnder} z míst pod čarou. `
+     +`${clUnder===1?"Ten se posunul":"Ti se posunuli"} na začátek pořadí, ${kolik}.`+vic;
+  }
+  // někdo pod čarou hranici překročil, ale předběhli ho jiní, kdo ji překročili
+  // s víc hlasy; výsledek je pak stejný, jako by rozhodlo jen pořadí
+  else if(clUnder>0) s=`Hranici ${prek(cl)} ${cl} ${kand(cl)}, z toho ${clUnder} z míst pod čarou. ${clUnder===1?"Toho ale předběhli":"Ty ale předběhli"} jiní, kdo hranici překročili s víc hlasy, takže mandáty nakonec připadly stejným lidem, jako kdyby rozhodlo jen pořadí na lístku.`;
+  else s=`Hranici ${prek(cl)} ${cl} ${kand(cl)}, ${cl===1?"byl ale ve volitelné části kandidátky i tak":"všichni ale byli ve volitelné části kandidátky i tak"}. Na obsazení mandátů to nemělo žádný vliv – rozhodlo pořadí na lístku.`;
+  if(wEl>=0&&bNe>=0&&votes[bNe]>votes[wEl]){
+    s+=` Nejslabší zvolený má ${fmt.format(votes[wEl])} ${hl(votes[wEl])}, nejsilnější nezvolený ${fmt.format(votes[bNe])}, tedy o ${fmt.format(votes[bNe]-votes[wEl])} víc.`;
+  }
+  return s;
+}
+// 1 -> one, 2-4 -> few, else many (22 reads "dvacet dva hlasů", so no modulo)
+const pl=(n,one,few,many)=>n===1?one:(n>=2&&n<=4?few:many);
+const hl=n=>pl(n,"hlas","hlasy","hlasů");
+const kand=n=>pl(n,"kandidát","kandidáti","kandidátů");
+const kl=n=>pl(n,"kandidátka","kandidátky","kandidátek");
+const md=n=>pl(n,"mandát","mandáty","mandátů");
+const prek=n=>pl(n,"překročil","překročili","překročilo");
+
+/* ----------------------------------------------------------------- header */
+const rokyTxt=()=>META.years[0]+"–"+META.years[META.years.length-1];
+function cutText(R){
+  return [
+    S.years.size?[...S.years].sort().map(i=>META.years[i]).join(", "):"všechny volby "+rokyTxt(),
+    regTxt(),
+    S.bands.size?"obce "+bandsTxt():"všechny obce",
+    S.typy.size===1?(S.typy.has(1)?"jen obce":"jen městské části a obvody"):null,
+    !S.rivals.size?null
+      :S.rivals.size===1&&S.rivals.has(0)?"obce s jedinou kandidátkou"
+      :S.rivals.size===5&&!S.rivals.has(0)?"obce s aspoň dvěma kandidátkami"
+      :[...S.rivals].sort((a,b)=>a-b).map(i=>RIV[i][0]).join(", ")+" kandidátek v obci",
+    S.tags.size?[...S.tags].join(", "):"všechny kandidátky",
+    posAll()?"všechna místa":posTxt(),
+    `${fmt.format(R.munis.size)} zastupitelstev`].filter(Boolean).join(" · ");
+}
+function header(R,A,nEx){
+  const cut=cutText(R);
+  const rest=R.el-R.jump-R.idle;
+  const sh=v=>R.el?pc(100*v/R.el)+" %":"–";
+  let h=`<p class="cutline">${cut}</p><div class="hero">${dotPlot(R)}<div class="tally">`
+    +`<div class="big3">`
+    +`<div><span class="n">${fmt.format(R.cand)}</span><span class="l">lidí kandidovalo</span></div>`
+    +`<div><span class="n">${fmt.format(R.el)}</span><span class="l">z nich získalo mandát</span></div>`
+    +`<div><span class="n hot">${fmt.format(R.jump)}</span><span class="l">z nich díky `
+    +`<span class="term" data-tip="Překročili hranici a posunuli se tím v pořadí na místo, které jim mandát přineslo.">přeskočení</span></span></div>`
+    +`</div>`
+    +`<p class="rest">Dalších <b>${fmt.format(R.idle)}</b> (${sh(R.idle)}) zvolených hranici také `
+    +`překročilo, mandát by ale dostali i bez toho. Zbylých <b>${fmt.format(rest)}</b> (${sh(rest)}) `
+    +`zvolených na hranici nedosáhlo; <b>${fmt.format(R.elBelow)}</b> (${sh(R.elBelow)}) `
+    +`nedosáhlo ani na průměr na své kandidátce.</p>`
+    +`<p class="defn"><b>Hranice</b> se počítá z průměrného počtu hlasů na jednoho kandidáta téže `
+    +`kandidátky: průměr se zaokrouhlí dolů na celé hlasy a zvýší o desetinu. Kdo jí dosáhne, posouvá `
+    +`se na začátek pořadí; kdo ne, bere se v pořadí, které sestavila strana. Kvůli tomu zaokrouhlení `
+    +`je hranice o něco níž než 110 % skutečného průměru, u malých kandidátek i znatelně.</p>`
+    +`</div></div>`;
+  if(A){
+    const l=A.l,ok=okrOf(D.mi[l]);
+    const where=`<b>${esc(D.names[D.mi[l]])}</b> (${ok?"okres "+esc(ok)+", ":""}${fmt.format(D.pop[l])} obyvatel), `
+      +`volby <b>${META.years[D.yr[l]]}</b>, kandidátka ${listInline(l)}`;
+    // šipky stojí nad příkladem vlevo, takže se při rozbalení kandidátky neposouvají
+    h+=`<div class="anec-nav"><span class="pager"><button type="button" id="anecPrev" aria-label="Předchozí příklad">‹</button>`
+      +`<span>${fmt.format(anecIdx+1)} z ${fmt.format(nEx)}</span>`
+      +`<button type="button" id="anecNext" aria-label="Další příklad">›</button></span>`
+      +`<span class="chipwrap" id="anecMode">`
+      +`<button type="button" class="chip" data-m="weak" aria-pressed="${anecMode==="weak"}">nejslabší vítěz</button> `
+      +`<button type="button" class="chip" data-m="gap" aria-pressed="${anecMode==="gap"}">největší rozdíl</button></span></div>`;
+    h+=`<div class="anec${A.cur?" cur":""}">`;
+    if(A.cur) h+=`<p class="ameta">${where}</p><p class="atit">${esc(A.cur.titulek)}</p>${txt(A.cur.text)}`;
+    else{
+      const av=avgOf(l),p=D.pos,vE=D.votes[A.iEl],vN=D.votes[A.iNe];
+      h+=`${where}: na <b>${p[A.iEl]}. místě</b> dostal kandidát `
+        +`<b>${fmt.format(vE)}</b> ${hl(vE)}, tedy ${Math.round(100*vE/av)} % průměru kandidátky, `
+        +`a mandát získal. Na <b>${p[A.iNe]}. místě</b> dostal kandidát <b>${fmt.format(vN)}</b> ${hl(vN)} `
+        +`(${Math.round(100*vN/av)} %) a mandát nezískal.`;
+    }
+    h+=`<div class="more"><details id="anecDet"${anecOpen?" open":""}><summary>Zobrazit celou kandidátku</summary>`
+      +`<div id="anecList"></div></details></div></div>`;
+    h+=`<p class="gen">Kandidátů, kteří měli víc hlasů než někdo zvolený z&nbsp;jejich vlastní `
+      +`kandidátky, a přesto zvoleni nebyli, je ve výběru <b>${fmt.format(R.beat)}</b>. `
+      +`Stalo se to na <b>${fmt.format(R.beatLists)}</b> kandidátkách `
+      +`z&nbsp;${fmt.format(R.seatLists)}, které nějaký mandát získaly.</p>`;
+  }
+  return h;
+}
+
+function dotPlot(R){
+  // three concentric rings; dots are laid out by angle, so each category
+  // forms one clean wedge and the proportions read like a pie you can count
+  const RINGS=[[30,74],[38,93],[46,112]];
+  let want=RINGS.reduce((a,r)=>a+r[0],0);
+  let rings=RINGS;
+  if(R.el<want){const k=R.el/want;
+    rings=RINGS.map(([c,r])=>[Math.max(1,Math.round(c*k)),r]);
+    want=rings.reduce((a,r)=>a+r[0],0);}
+  const per=R.el/want;
+  const pts=[];
+  rings.forEach(([cnt,rad])=>{for(let k=0;k<cnt;k++)pts.push({a:(k+0.5)/cnt,rad});});
+  pts.sort((x,y)=>x.a-y.a);
+  const mid=R.el-R.jump-R.idle-R.elBelow;         // nad průměrem, pod hranicí
+  const G=[["zvolen díky přeskočení",R.jump,"získalo mandát přeskočením."],
+           ["dosáhl na hranici, mandát by měl i tak",R.idle,
+            "dosáhlo na hranici přeskočení, ale mandát by získali i tak."],
+           ["na hranici nedosáhl, na průměr ano",mid,
+            "získalo mandát, aniž by dosáhli na hranici přeskočení. Průměr kandidátky překročili."],
+           ["nedosáhl ani na průměr kandidátky",R.elBelow,
+            "získalo mandát, aniž by dosáhli aspoň průměru své kandidátky."]];
+  const tipFor=gi=>{const v=G[gi][1],sh=R.el?100*v/R.el:0;
+    return `${pc(sh)} % zvolených (${fmt.format(v)}) ${G[gi][2]}`;};
+  const cum=[];let acc=0;G.forEach(([,v])=>{acc+=v;cum.push(acc);});
+  const CX=125,CY=125,DR=6.2;
+  let d="";
+  pts.forEach((p,i)=>{
+    const t=(i+0.5)*per;
+    let gi=0;while(gi<3&&t>=cum[gi])gi++;
+    const ang=p.a*2*Math.PI-Math.PI/2;
+    const x=CX+Math.cos(ang)*p.rad,y=CY+Math.sin(ang)*p.rad;
+    d+=`<circle class="d g${gi}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${DR}" `
+      +`style="animation-delay:${Math.round(i*430/pts.length)}ms" `
+      +`data-tip="${tipFor(gi)}"></circle>`;
+  });
+  const share=R.el?100*R.jump/R.el:0;
+  d+=`<circle cx="${CX}" cy="${CY}" r="66" fill="var(--bg)"/>`
+    +`<text class="ctr-n" x="${CX}" y="${CY+3}">${pc(share)} %</text>`
+    +`<text class="ctr-l" x="${CX}" y="${CY+23}">mandátů díky přeskočení</text>`;
+  const each=`Tečky jsou zvolení zastupitelé. `+(per>1.5
+    ?`Každá zastupuje ${fmt.format(Math.round(per))} ${md(Math.round(per))}.`
+    :`Každá zastupuje jeden mandát.`);
+  return `<div><svg class="donut" viewBox="0 0 250 250" role="img" `
+    +`aria-label="Podíl mandátů získaných přeskočením">${d}</svg>`
+    +`<p class="dotkey">`+G.map(([lab,v],i)=>{
+        const col=["var(--hot)","#2A4FD0","#6E90E8","#B9CBF4"][i];
+        return `<span data-tip="${tipFor(i)}"><i style="background:${col}"></i>${lab}`
+          +`<b>${fmt.format(v)}</b></span>`;}).join("")+`</p>`
+    +`<p class="dotnote">${each}</p></div>`;
+}
+
+/* ----------------------------------------------------------------- charts */
+function funnel(R){
+  const steps=[
+    ["Nad průměrem své kandidátky",R.cl+R.high,"mají víc hlasů, než je průměr na kandidáta","s2",
+      "Průměr je součet všech hlasů kandidátky dělený počtem jejích kandidátů. Být nad ním ještě nestačí."],
+    ["Nad hranicí přeskočení",R.cl,"posouvají se na vrchol kandidátky společně s ostatními skokany","s3",
+      "Hranice je průměr zaokrouhlený dolů na celé hlasy a zvýšený o desetinu, tedy nejvýš 110 % skutečného průměru."]];
+  const max=Math.max(1,R.cand);
+  $("fun").innerHTML=steps.map(([lab,v,note,cls,tip])=>
+    `<div class="frow ${cls}"><div class="lab"><span class="term" data-tip="${tip}">${lab}</span><small>${note}</small></div>`
+    +`<div class="ftrack"><div class="ffill" style="width:${Math.max(.4,100*v/max)}%"></div></div>`
+    +`<div class="val">${fmt.format(v)}<small>${pc(100*v/max)} % kandidátů</small></div></div>`).join("");
+  const seg=[["přeskočením získali mandát",R.jump,"var(--hot)",
+      `${fmt.format(R.jump)} kandidátů přeskočením dosáhlo na mandát, který by jinak nezískali.`],
+    ["mandát by získali i podle pořadí",R.idle,"var(--azure)",
+      `${fmt.format(R.idle)} kandidátů bylo na kandidátce dost vysoko, takže by je zvolilo i samotné pořadí. `
+      +`U ${fmt.format(R.needed)} z nich ale přeskočení přesto rozhodlo: kdyby hranici nepřekročili `
+      +`jen oni, předběhli by je ostatní skokani zespodu.`],
+    ["mandát na ně nezbyl, protože jiní skokani byli ještě úspěšnější",R.short,"var(--cool)",
+      `${fmt.format(R.short)} kandidátů hranici překročilo, jenže kandidátka získala málo mandátů, takže je předběhli jiní skokani s více hlasy.`],
+    ["jejich kandidátka nezískala mandát",R.noSeat,"var(--surface-2)",
+      `${fmt.format(R.noSeat)} skokanů bylo na kandidátce, která neuspěla jako celek. Nezískal z ní mandát nikdo, takže přeskočení nemělo žádný následek.`]];
+  const tot=seg.reduce((a,s)=>a+s[1],0)||1;
+  $("stack").innerHTML=seg.map(([lab,v,c,tip])=>
+    `<div style="width:${100*v/tot}%;background:${c}" data-tip="${tip}"></div>`).join("");
+  $("skey").innerHTML=seg.map(([lab,v,c])=>
+    `<span><i style="background:${c}"></i><span>${lab}</span></span>`).join("");
+}
+function bandChart(B){
+  const on_=i=>S.bands.size===0||S.bands.has(i);
+  const W=820,H=24,G=7,LW=150,RW=70,bw=W-LW-RW,h=NB*(H+G);let s="";
+  const v=[];
+  for(let i=0;i<NB;i++)v.push(B.m[i]?100*B.d[i]/B.m[i]:null);
+  const mx=Math.max(5,...v.filter(x=>x!=null));
+  BLAB.forEach((lab,i)=>{
+    const y=i*(H+G),on=on_(i),col=on?"var(--ink)":"var(--ink-3)";
+    s+=`<text x="${LW-9}" y="${y+16}" text-anchor="end" font-size="12" fill="${col}">${lab}</text>`;
+    if(v[i]==null){s+=`<text x="${LW}" y="${y+16}" font-size="12" fill="var(--ink-3)">–</text>`;return;}
+    const rng=i===0?`do ${fmt.format(BANDS[i][1]-1)} obyvatel`
+      :i===NB-1?`nad milion obyvatel`
+      :`od ${fmt.format(BANDS[i][0])} do ${fmt.format(BANDS[i][1]-1)} obyvatel`;
+    const tip=`V obcích ${rng} připadlo přeskočením ${pc(v[i])} % mandátů `
+      +`(${fmt.format(B.d[i])} z ${fmt.format(B.m[i])}).`;
+    s+=`<g data-tip="${tip}">`
+      +`<rect x="${LW}" y="${y}" width="${bw}" height="${H}" fill="var(--surface)"/>`
+      +`<rect x="${LW}" y="${y}" width="${Math.max(1,bw*v[i]/mx)}" height="${H}" fill="${on?"var(--hot)":"var(--hot-soft)"}"/>`
+      +`<text x="${LW+bw+6}" y="${y+16}" font-size="12" fill="${col}">${pc(v[i])} %</text>`
+      +`<rect x="0" y="${y}" width="${W}" height="${H}" fill="transparent"/></g>`;
+  });
+  const c=$("bandChart");c.setAttribute("viewBox",`0 0 ${W} ${h}`);c.innerHTML=s;
+}
+/* ----------------------------------------------------------------- render */
+function render(){
+  if(!booted)return;
+  const head=$("head"),fun=$("fun"),band=$("bandChart");
+  if(!head&&!fun&&!band){if(searchRefresh)searchRefresh();postHeight();return;}
+  const {R,B,EX}=scan();
+  const cutEl=$("cut");
+  if(cutEl)cutEl.innerHTML=(linked?"Výběr z průzkumníku výše: ":"")+cutText(R);
+  broadcast();
+  if(!R.cand){
+    const msg='<div class="empty">Ve vybraném výběru nezůstal nikdo. Uvolněte některý filtr.</div>';
+    if(head)head.innerHTML=msg;
+    if(fun){fun.innerHTML=msg;$("stack").innerHTML="";$("skey").innerHTML="";}
+    if(band)bandChart(B);
+    postHeight();return;}
+  if(head){
+  // ručně vybrané příběhy jdou první, pokud spadají do výběru, za nimi ostatní paradoxy
+  const AX=CUR.filter(c=>PASS[c.l]).map(c=>({l:c.l,cur:c,marks:c.marks}));
+  const seen=new Set(AX.map(a=>a.l));
+  EX.forEach(e=>{if(!seen.has(e.l))AX.push({l:e.l,iEl:e.iEl,iNe:e.iNe,marks:new Set([e.iEl,e.iNe])});});
+  if(anecIdx>=AX.length)anecIdx=0;
+  const A=AX.length?AX[anecIdx]:null;
+  head.innerHTML=header(R,A,AX.length);
+  if(A&&$("anecList")){
+    $("anecList").innerHTML=listTable(A.l,A.marks);
+    $("anecDet").addEventListener("toggle",e=>{
+      const zmena=e.target.open!==anecOpen;
+      anecOpen=e.target.open;
+      // jen když se stahování opravdu rozběhlo, jinak by se přepsala hláška o chybě
+      if(e.target.open&&zmena)ensureNames();
+      postHeight();});
+    $("anecMode").onclick=e=>{const b=e.target.closest("button[data-m]");if(!b)return;
+      anecMode=b.dataset.m;anecIdx=0;render();};
+    $("anecPrev").onclick=()=>{anecIdx=(anecIdx-1+AX.length)%AX.length;render();};
+    $("anecNext").onclick=()=>{anecIdx=(anecIdx+1)%AX.length;render();};
+  }
+  }
+  if(fun)funnel(R);
+  if(band)bandChart(B);
+  if(searchRefresh)searchRefresh();
+  postHeight();
+}
+let raf=0;const sched=()=>{if(!raf)raf=requestAnimationFrame(()=>{raf=0;render();});};
+function setupTips(){
+  const tip=document.createElement("div");tip.id="tip";document.body.appendChild(tip);
+  const show=el=>{const t=el.getAttribute("data-tip");if(!t)return;
+    tip.textContent=t;tip.classList.add("on");
+    const r=el.getBoundingClientRect();
+    tip.style.left=Math.min(window.innerWidth-12,Math.max(12,r.left+r.width/2))+"px";
+    tip.style.top=(r.top-8)+"px";};
+  const hide=()=>tip.classList.remove("on");
+  document.addEventListener("mouseover",e=>{const el=e.target.closest("[data-tip]");el?show(el):hide();});
+  document.addEventListener("focusin",e=>{const el=e.target.closest("[data-tip]");el?show(el):hide();});
+  document.addEventListener("mouseleave",hide,true);
+  addEventListener("scroll",hide,{passive:true});
+}
+let lastH=0;
+function postHeight(){
+  if(window.parent===window)return;
+  const h=Math.ceil(document.documentElement.getBoundingClientRect().height);
+  if(h===lastH)return;lastH=h;
+  try{parent.postMessage({ih21Explorer:true,height:h},"*");}catch(e){}
+}
+
+/* ----------------------------------------------------------------- search */
+function setupSearch(){
+  // klíčem je kód obce, ne index v tabulce názvů: Praha se v roce 2010 volila
+  // v sedmi obvodech, které by se jinak tvářily jako sedm různých obcí
+  const byMuni=new Map();
+  for(let l=0;l<D.L;l++){const c=D.mcode[D.mi[l]];
+    if(!byMuni.has(c))byMuni.set(c,[]);byMuni.get(c).push(l);}
+  const nameOf=c=>D.names[D.mi[byMuni.get(c)[0]]];
+  const norm=s=>s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+  // "Praha hl.m." je v datech ČSÚ celé město; bez téhle úpravy se na dotaz
+  // "praha" neukáže, protože abecedně leží až za Prahou 21
+  const skey=n=>norm(n.replace(/\s*hl\.m\.$/,"").trim());
+  const size=m=>{const ls=byMuni.get(m);
+    const y=Math.max(...ls.map(l=>D.yr[l]));          // podle posledních voleb
+    const w=new Set(ls.filter(l=>D.yr[l]===y).map(l=>D.mi[l]));
+    let t=0;w.forEach(i=>{const f=ls.find(l=>D.mi[l]===i);t+=D.mand[f];});
+    return w.size>1?t:D.mand[ls.find(l=>D.yr[l]===y)];};
+  const idx=[...byMuni.keys()].map(m=>({m,name:nameOf(m),key:skey(nameOf(m)),
+    full:norm(nameOf(m)),mand:size(m)}));
+  const q=$("q"),hits=$("hits"),detail=$("detail");
+  let curMuni=null,curList=null;
+  const chipFor=(l,i)=>{
+    const f=LISTS?LISTS.full(l):"",same=!f||f.toLowerCase()===(D.abbr[l]||"").toLowerCase();
+    return `<button type="button" class="chip" data-l="${l}" aria-pressed="false"${same?"":` data-tip="${esc(f)}"`}>`
+      +`${listChip(l,i)}</button>`;};
+  function show(m,keep){
+    curMuni=m;
+    // jedna obec má kandidátky z několika voleb; bez rozdělení po letech
+    // vypadá seznam jako pět SNK vedle sebe
+    const anyY=S.years.size===0;
+    const ls=byMuni.get(m).filter(l=>anyY||S.years.has(D.yr[l]));
+    if(!ls.length){
+      detail.innerHTML=`<p class="sub" style="margin:14px 0 0">${nameOf(m)} – ve `
+        +`vybraných volbách tu žádná kandidátka nekandidovala.</p>`;
+      curList=null;postHeight();return;
+    }
+    const byYear=new Map();
+    ls.forEach(l=>{const y=D.yr[l];if(!byYear.has(y))byYear.set(y,[]);byYear.get(y).push(l);});
+    const years=[...byYear.keys()].sort((a,b)=>a-b);
+    years.forEach(y=>byYear.get(y).sort((a,b)=>D.pv[b]-D.pv[a]));
+    if(!keep||!ls.includes(curList))curList=byYear.get(years[years.length-1])[0];
+    detail.innerHTML=`<p class="sub" style="margin:14px 0 8px"><b>${nameOf(m)}</b>`
+      +`${okrSuf(D.mi[byMuni.get(m)[0]])} – `
+      +`${fmt.format(ls.length)} ${kl(ls.length)} · `
+      +(years.length===1?`volby ${META.years[years[0]]}`
+        :`volby ${META.years[years[0]]}–${META.years[years[years.length-1]]}`)+`</p>`
+      +`<div id="lchips">`+years.map(y=>{
+        const lw=byYear.get(y),wards=[...new Set(lw.map(l=>D.mward[D.mi[l]]))].sort((a,b)=>a-b);
+        const body=(wards.length>1||isSplit(lw[0]))
+          ? wards.map(w=>`<span class="wd">obvod ${w}</span>`
+              +lw.filter(l=>D.mward[D.mi[l]]===w).map((l,i)=>chipFor(l,i)).join(" ")).join(" ")
+          : lw.map((l,i)=>chipFor(l,i)).join(" ");
+        return `<div class="yrow"><span class="yr">${META.years[y]}</span><span class="ych">${body}</span></div>`;
+      }).join("")+`</div><div id="lbody"></div>`;
+    const draw=l=>{curList=l;
+      [...$("lchips").querySelectorAll("button[data-l]")].forEach(x=>
+        x.setAttribute("aria-pressed",+x.dataset.l===l));
+      $("lbody").innerHTML=listTable(l);postHeight();};
+    $("lchips").onclick=e=>{const b=e.target.closest("button[data-l]");if(!b)return;draw(+b.dataset.l);};
+    draw(curList);
+  }
+  searchRefresh=()=>{if(curMuni!==null)show(curMuni,true);};
+  q.addEventListener("input",()=>{
+    ensureNames();ensureLists();
+    const v=norm(q.value.trim());
+    if(v.length<2){hits.innerHTML="";return;}
+    const rank=o=>o.key===v?0:(o.key.startsWith(v)||o.full.startsWith(v))?1:2;
+    const all=idx.filter(o=>o.key.includes(v)||o.full.includes(v))
+      .sort((a,b)=>rank(a)-rank(b) || b.mand-a.mand || a.name.localeCompare(b.name,"cs"));
+    const r=all.slice(0,15);
+    const anyY=S.years.size===0;
+    hits.innerHTML=r.length?r.map(o=>{
+      const ll=byMuni.get(o.m).filter(l=>anyY||S.years.has(D.yr[l]));
+      return `<li><button type="button" data-m="${o.m}">${o.name}`
+        +`<span>${okrOf(D.mi[byMuni.get(o.m)[0]])||"–"} · ${o.mand} zastupitelů</span></button></li>`;}).join("")
+      +(all.length>r.length?`<li class="more">a dalších ${all.length-r.length} – upřesněte dotaz</li>`:"")
+      :'<li><button type="button" disabled>Nic nenalezeno</button></li>';
+  });
+  hits.addEventListener("click",e=>{const b=e.target.closest("button[data-m]");if(!b)return;
+    q.value=nameOf(+b.dataset.m);hits.innerHTML="";show(+b.dataset.m,false);});
+}
+
+/* --------------------------------------------------------------- controls */
+function chips(host,items,isOn,onPick){
+  host.innerHTML=items.map((t,i)=>`<button type="button" class="chip" data-i="${i}" aria-pressed="false">${t}</button>`).join(" ");
+  host.onclick=e=>{const b=e.target.closest("button[data-i]");if(!b)return;onPick(+b.dataset.i);sync();sched();};
+  return ()=>[...host.children].forEach((b,i)=>b.setAttribute("aria-pressed",isOn(i)));
+}
+let syncs=[];const sync=()=>syncs.forEach(f=>f());
+
+const ABS=[["vše",1,70],["1.",1,1],["1.–3.",1,3],["1.–5.",1,5],["6. a dál",6,70],["11. a dál",11,70]];
+const REL=[["celá",0,100],["prvních 5 %",0,5],["prvních 10 %",0,10],["prvních 20 %",0,20],["prvních 40 %",0,40],
+           ["posledních 40 %",60,100],["posledních 20 %",80,100],["posledních 10 %",90,100],["posledních 5 %",95,100]];
+
+/* -------------------------------------------- propojení embedů na jedné stránce */
+// průzkumník posílá svůj výběr sousedním embedům (grafům) na téže stránce. Zprávy
+// chodí jen mezi soubory z téže adresy, takže je nic jiného na stránce nepodvrhne.
+let linked=false,lastSent="";
+const srt=a=>[...a].sort((x,y)=>x<y?-1:x>y?1:0);
+const ser=()=>({years:srt(S.years),bands:srt(S.bands),tags:srt(S.tags),kraje:srt(S.kraje),
+  okresy:srt(S.okresy),typy:srt(S.typy),rivals:srt(S.rivals),posMode:S.posMode,
+  absLo:S.absLo,absHi:S.absHi,relLo:S.relLo,relHi:S.relHi});
+function applyState(o){
+  const num=(a,max)=>Array.isArray(a)?a.filter(x=>Number.isInteger(x)&&x>=0&&x<max):[];
+  const cl=(x,a,b,d)=>Number.isFinite(x)?Math.min(b,Math.max(a,x)):d;
+  S.years=new Set(num(o.years,META.years.length));S.bands=new Set(num(o.bands,NB));
+  S.tags=new Set((Array.isArray(o.tags)?o.tags:[]).filter(t=>META.tags.includes(t)));
+  S.kraje=new Set(num(o.kraje,META.kraje.length));S.okresy=new Set(num(o.okresy,META.okresy.length));
+  S.typy=new Set(num(o.typy,3));S.rivals=new Set(num(o.rivals,RIV.length));
+  S.posMode=o.posMode==="rel"?"rel":"abs";
+  S.absLo=cl(o.absLo,1,70,1);S.absHi=cl(o.absHi,1,70,70);S.relLo=cl(o.relLo,0,100,0);S.relHi=cl(o.relHi,0,100,100);
+}
+function siblings(msg){
+  if(window.parent===window)return;
+  try{for(let i=0;i<window.parent.length;i++){const w=window.parent[i];
+    if(w!==window)w.postMessage(msg,location.origin);}}catch(e){}
+}
+function broadcast(){
+  if(VIEW!=="pruzkumnik"||!booted)return;
+  const s=JSON.stringify(ser());if(s===lastSent)return;lastSent=s;
+  siblings({krizkometr:1,typ:"filtry",S:JSON.parse(s)});
+}
+addEventListener("message",e=>{
+  const d=e.data;if(!d||d.krizkometr!==1||e.origin!==location.origin)return;
+  if(d.typ==="dotaz"&&VIEW==="pruzkumnik"){lastSent="";broadcast();}
+  else if(d.typ==="filtry"&&VIEW==="grafy"&&booted){applyState(d.S||{});linked=true;sched();}
+});
+
+/* ---------------------------------------------------------------- předvolby */
+const LASTY=()=>META.years.length-1;
+function clearS(){["years","bands","tags","kraje","okresy","typy","rivals"].forEach(k=>S[k].clear());
+  S.posMode="abs";S.absLo=1;S.absHi=70;S.relLo=0;S.relHi=100;}
+// předvolby si nechávají vybraný rok; „Vše“ ho zruší, „Volby …“ nastaví poslední volby
+const PRESETS=[
+  {lab:()=>"Volby "+META.years[LASTY()],set(){S.years.add(LASTY());}},
+  {lab:()=>"Vše",set(){}},
+  {lab:()=>"Velká města",keep:1,set(){[8,9,10].forEach(b=>S.bands.add(b));}},
+  {lab:()=>"Obce 5–10 tisíc",keep:1,set(){S.bands.add(5);}},
+  {lab:()=>"Spodní místa na kandidátkách",keep:1,
+   set(){S.posMode="rel";S.relLo=80;S.relHi=100;[1,2,3,4,5].forEach(r=>S.rivals.add(r));}}];
+function applyPreset(p){const y=[...S.years];clearS();if(p.keep)y.forEach(v=>S.years.add(v));p.set();}
+function presetOn(p){const was=ser(),now=JSON.stringify(was);applyPreset(p);
+  const would=JSON.stringify(ser());applyState(was);return now===would;}
+function setupPresets(paintAbs,paintRel){
+  const host=$("presets");if(!host)return;
+  host.innerHTML=PRESETS.map((p,i)=>`<button type="button" class="chip pre" data-p="${i}" aria-pressed="false">${p.lab()}</button>`).join(" ");
+  host.onclick=e=>{const b=e.target.closest("button[data-p]");if(!b)return;
+    applyPreset(PRESETS[+b.dataset.p]);anecIdx=0;paintAbs();paintRel();sync();sched();};
+  syncs.push(()=>[...host.children].forEach((b,i)=>b.setAttribute("aria-pressed",presetOn(PRESETS[i]))));
+}
+
+function boot(){
+  $("boot").replaceWith($("tpl").content.cloneNode(true));
+  document.querySelectorAll(".roky").forEach(el=>el.textContent=rokyTxt());
+  // výchozí výběr jsou poslední volby; čtečka kandidátek ukazuje všechny ročníky
+  if(VIEW!=="kandidatka")S.years.add(LASTY());
+  if($("filters")){
+  const toggle=(set,v)=>set.has(v)?set.delete(v):set.add(v);
+  syncs.push(chips($("yearPre"),["vše"].concat(META.years.map(String)),
+    i=>i===0?S.years.size===0:S.years.has(i-1),
+    i=>{if(i===0)S.years.clear();else toggle(S.years,i-1);}));
+  syncs.push(chips($("popPre"),["vše"].concat(BLAB),
+    i=>i===0?S.bands.size===0:S.bands.has(i-1),
+    i=>{if(i===0)S.bands.clear();else toggle(S.bands,i-1);}));
+  const KR=["vše"].concat(META.kraje);
+  syncs.push(chips($("krajPre"),KR,i=>i===0?S.kraje.size===0:S.kraje.has(i-1),
+    i=>{if(i===0){S.kraje.clear();S.okresy.clear();}
+        else{const k=i-1;
+          if(S.kraje.has(k)){S.kraje.delete(k);
+            [...S.okresy].forEach(o=>{if(META.okresy[o][1]===k)S.okresy.delete(o);});}
+          else S.kraje.add(k);}}));
+  const TY=[["obce",1],["městské části a obvody",2]];
+  syncs.push(chips($("typPre"),["vše"].concat(TY.map(t=>t[0])),
+    i=>i===0?S.typy.size===0:S.typy.has(TY[i-1][1]),
+    i=>{if(i===0)S.typy.clear();
+        else{const v=TY[i-1][1];S.typy.has(v)?S.typy.delete(v):S.typy.add(v);}}));
+  // „2 a víc“ je jen zkratka: zapne všechny skupiny kromě obcí s jedinou kandidátkou
+  const SOUT=[1,2,3,4,5];
+  const rivLab=["vše","2 a víc"].concat(RIV.map(r=>r[0]));
+  syncs.push(chips($("rivPre"),rivLab,
+    i=>i===0?S.rivals.size===0
+      :i===1?(S.rivals.size===SOUT.length&&!S.rivals.has(0))
+      :S.rivals.has(i-2),
+    i=>{if(i===0)S.rivals.clear();
+        else if(i===1){const on=S.rivals.size===SOUT.length&&!S.rivals.has(0);
+          S.rivals.clear();if(!on)SOUT.forEach(v=>S.rivals.add(v));}
+        else{const v=i-2;S.rivals.has(v)?S.rivals.delete(v):S.rivals.add(v);}}));
+  const okresBtn=()=>{
+    const ks=[...S.kraje].sort((a,b)=>META.kraje[a].localeCompare(META.kraje[b],"cs"));
+    $("okresBox").hidden=ks.length===0;
+    $("okresPre").innerHTML=ks.map(k=>{
+      const ids=META.okresy.map((o,i)=>i).filter(i=>META.okresy[i][1]===k)
+        .sort((a,b)=>META.okresy[a][0].localeCompare(META.okresy[b][0],"cs"));
+      const cely=!ids.some(i=>S.okresy.has(i));
+      return `<div class="krow"><span class="kr">${META.kraje[k]}</span><span class="kch">`
+        +`<button type="button" class="chip" data-k="${k}" aria-pressed="${cely}">celý kraj</button> `
+        +ids.map(i=>`<button type="button" class="chip" data-o="${i}" `
+          +`aria-pressed="${S.okresy.has(i)}">${META.okresy[i][0]}</button>`).join(" ")
+        +`</span></div>`;}).join("");
+  };
+  $("okresPre").onclick=e=>{
+    const k=e.target.closest("button[data-k]");
+    if(k){const kk=+k.dataset.k;
+      [...S.okresy].forEach(o=>{if(META.okresy[o][1]===kk)S.okresy.delete(o);});
+      sync();sched();return;}
+    const b=e.target.closest("button[data-o]");if(!b)return;
+    const i=+b.dataset.o;S.okresy.has(i)?S.okresy.delete(i):S.okresy.add(i);
+    sync();sched();};
+  syncs.push(okresBtn);
+  syncs.push(()=>{$("regSum").textContent=regTxt();});
+  syncs.push(chips($("tagChips"),META.tags,i=>S.tags.has(META.tags[i]),
+    i=>{const t=META.tags[i];S.tags.has(t)?S.tags.delete(t):S.tags.add(t);}));
+  const fill=(el,lo,hi,min,max)=>{const a=(lo-min)/(max-min)*100,b=(hi-min)/(max-min)*100;
+    el.style.left=a+"%";el.style.width=(b-a)+"%";};
+  const absOut=()=>{$("absOut").textContent=(S.absLo===1&&S.absHi>=70)?"bez omezení":`${S.absLo}. až ${S.absHi}. místo`;
+    fill($("absFil"),S.absLo,S.absHi,1,70);};
+  const paintAbs=()=>{$("absLo").value=S.absLo;$("absHi").value=S.absHi;absOut();sched();};
+  const readAbs=()=>{let a=+$("absLo").value,b=+$("absHi").value;
+    if(a>b){if(document.activeElement===$("absLo"))b=a,$("absHi").value=b;else a=b,$("absLo").value=a;}
+    S.absLo=a;S.absHi=b;absOut();sync();sched();};
+  $("absLo").oninput=readAbs;$("absHi").oninput=readAbs;
+  syncs.push(chips($("absPre"),ABS.map(p=>p[0]),i=>S.absLo===ABS[i][1]&&S.absHi===ABS[i][2],
+    i=>{S.absLo=ABS[i][1];S.absHi=ABS[i][2];paintAbs();}));
+  const relOut=()=>{$("relOut").textContent=(S.relLo===0&&S.relHi===100)?"celá kandidátka":`${S.relLo} – ${S.relHi} %`;
+    fill($("relFil"),S.relLo,S.relHi,0,100);};
+  const paintRel=()=>{$("relLo").value=S.relLo;$("relHi").value=S.relHi;relOut();sched();};
+  const readRel=()=>{let a=+$("relLo").value,b=+$("relHi").value;
+    if(a>b){if(document.activeElement===$("relLo"))b=a,$("relHi").value=b;else a=b,$("relLo").value=a;}
+    S.relLo=a;S.relHi=b;relOut();sync();sched();};
+  $("relLo").oninput=readRel;$("relHi").oninput=readRel;
+  syncs.push(chips($("relPre"),REL.map(p=>p[0]),i=>S.relLo===REL[i][1]&&S.relHi===REL[i][2],
+    i=>{S.relLo=REL[i][1];S.relHi=REL[i][2];paintRel();}));
+  const MODES=[["podle čísla místa","abs"],["podle podílu délky","rel"]];
+  $("posMode").innerHTML=MODES.map(([lab,m])=>
+    `<button type="button" data-m="${m}" aria-pressed="false">${lab}</button>`).join("");
+  $("posMode").onclick=e=>{const b=e.target.closest("button[data-m]");if(!b)return;
+    S.posMode=b.dataset.m;sync();sched();};
+  syncs.push(()=>{
+    [...$("posMode").children].forEach(b=>b.setAttribute("aria-pressed",b.dataset.m===S.posMode));
+    $("modeAbs").hidden=S.posMode!=="abs";
+    $("modeRel").hidden=S.posMode!=="rel";
+    $("posSum").textContent=posTxt();
+  });
+  const sums=()=>{
+    $("yearSum").textContent=S.years.size?[...S.years].sort().map(i=>META.years[i]).join(", "):"vše";
+    const ri=[...S.rivals].sort((a,b)=>a-b);
+    const soutez=ri.length===5&&!S.rivals.has(0);
+    const p=[bandsTxt()];
+    if(S.typy.size===1)p.push(S.typy.has(1)?"obce":"městské části");
+    if(soutez)p.push("2 a víc kand.");
+    else if(ri.length)p.push(ri.length>2?ri.length+" skupiny":ri.map(i=>RIV[i][0]).join(", ")+" kand.");
+    $("popSum").textContent=p.join(" · ");
+    const ts=[...S.tags];
+    $("tagSum").textContent=ts.length?(ts.length>2?ts.length+" stran":ts.join(", ")):"vše";
+  };
+  syncs.push(sums);
+  // jen jedna rozbalená naráz, ať lišta zůstane nízká
+  $("filters").addEventListener("toggle",e=>{
+    if(e.target.open)[...$("filters").children].forEach(d=>{if(d!==e.target)d.open=false;});
+    postHeight();},true);
+  // v capture fázi, tedy dřív, než si tlačítko překreslí vlastní obsah a odpojí
+  // se z DOMu – jinak by closest(".fg") vrátilo null a panel by se zavřel
+  document.addEventListener("click",e=>{
+    if(!e.target.closest(".fg"))[...$("filters").children].forEach(d=>d.open=false);},true);
+  $("filters").addEventListener("submit",e=>e.preventDefault());
+  setupPresets(paintAbs,paintRel);
+  paintAbs();paintRel();
+  }
+  if($("q"))setupSearch();
+  setupTips();
+  booted=true;
+  sync();render();
+  addEventListener("resize",postHeight);
+  if("ResizeObserver" in window)new ResizeObserver(()=>requestAnimationFrame(postHeight)).observe(document.documentElement);
+  if(VIEW==="grafy")siblings({krizkometr:1,typ:"dotaz"});
+  if($("q")||$("head"))prefetchNames();
+}
+async function loadCurated(){
+  try{
+    if(window.__A)return window.__A;
+    const r=await fetch(new URL(SOUBORY.anekdoty+"?v="+VERZE,DATA_URL));
+    return r.ok?await r.json():[];
+  }catch(e){return [];}
+}
+// příběh se v datech dohledá podle roku, kódu obce, obvodu, zkratky a počtu kandidátů
+function resolveCurated(j){
+  CUR=[];
+  const arr=Array.isArray(j)?j:(j&&Array.isArray(j.anekdoty)?j.anekdoty:[]);
+  arr.forEach(a=>{
+    const yi=META.years.indexOf(a.rok);if(yi<0)return;
+    for(let l=0;l<D.L;l++){
+      if(D.yr[l]!==yi)continue;const m=D.mi[l];
+      if(D.mcode[m]!==a.kod||D.mward[m]!==(a.obvod||1))continue;
+      if(a.zkratka!=null&&D.abbr[l]!==a.zkratka)continue;
+      if(a.kandidatu&&D.n[l]!==a.kandidatu)continue;
+      const o=D.off[l],marks=new Set(),oz=a.oznacit||[];
+      for(let i=0;i<D.n[l];i++)if(oz.includes(D.pos[o+i]))marks.add(o+i);
+      CUR.push({l,marks,titulek:a.titulek||"",text:a.text||""});break;
+    }
+  });
+}
+(async function(){
+  try{
+    const pA=(VIEW==="vse"||VIEW==="pruzkumnik")?loadCurated():Promise.resolve([]);
+    D=parse(window.__P?await gunzip(b64(window.__P)):await fetchBytes(SOUBORY.vysledky));delete window.__P;
+    findSplits();countRivals();resolveCurated(await pA);boot();
+  }catch(e){$("boot").innerHTML='<div class="empty">Data se nepodařilo načíst ('+esc(e&&e.message||e)
+    +'). Stránka potřebuje Chrome, Edge, Firefox&nbsp;113+ nebo Safari&nbsp;16.4+.</div>';}
+})();
+})();

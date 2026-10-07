@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Křížkometr – Průzkumník přeskakování v komunálních volbách</title>
+<meta name="description" content="Kolik mandátů v komunálních volbách rozhodli voliči přeskočením a kolik pořadí na kandidátce. Volby do zastupitelstev obcí od roku 2006, data ČSÚ.">
+<meta property="og:title" content="Křížkometr – Průzkumník přeskakování v komunálních volbách">
+<meta property="og:description" content="Kolik mandátů v komunálních volbách rozhodli voliči přeskočením a kolik pořadí na kandidátce. Volby do zastupitelstev obcí od roku 2006, data ČSÚ.">
+<meta property="og:image" content="https://instituth21.github.io/pruzkumnik-komunalek/assets/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="stylesheet" href="assets/krizkometr.css?v=2026-10-07">
+</head>
+<body data-view="vse">
+<div class="wrap">
+<div id="boot">Načítám data…</div>
+<template id="tpl">
+<header class="brand"><img src="assets/krizkometr-logo-claim.svg" alt="Křížkometr – Průzkumník přeskakování v komunálních volbách" onerror="var s=document.createElement('span');s.className='wordmark';s.textContent='Křížkometr';this.replaceWith(s)"></header>
+<section>
+  <div class="chipwrap presets" id="presets" role="group" aria-label="Předvolby výběru"></div>
+  <form class="filters" id="filters" autocomplete="off">
+    <details class="fg"><summary><b>Rok</b><span class="val" id="yearSum">vše</span></summary>
+      <div class="ddp"><div class="chipwrap" id="yearPre"></div></div></details>
+    <details class="fg"><summary><b>Kraj a okres</b><span class="val" id="regSum">celá ČR</span></summary>
+      <div class="ddp"><p class="hint">Vyberte kraje. U každého vybraného kraje se pak dají zúžit okresy; ostatních krajů se to nedotkne.</p>
+      <div class="chipwrap" id="krajPre"></div>
+      <div id="okresBox" hidden><p class="hint" style="margin:12px 0 7px">Okresy ve vybraných krajích</p>
+      <div class="chipwrap" id="okresPre"></div></div></div></details>
+    <details class="fg"><summary><b>Obec</b><span class="val" id="popSum">vše</span></summary>
+      <div class="ddp"><p class="hint">Počet obyvatel v roce voleb. Lze vybrat víc pásem najednou.</p>
+      <div class="chipwrap" id="popPre"></div>
+      <p class="hint" style="margin:13px 0 7px">Typ zastupitelstva</p>
+      <div class="chipwrap" id="typPre"></div>
+      <p class="hint" style="margin:13px 0 7px">Kolik kandidátek v obci soupeřilo</p>
+      <div class="chipwrap" id="rivPre"></div></div></details>
+    <details class="fg"><summary><b>Kandidátka</b><span class="val" id="tagSum">vše</span></summary>
+      <div class="ddp"><p class="hint">Kandidátky, na nichž je alespoň jedna vybraná strana.</p>
+      <div class="chipwrap" id="tagChips"></div></div></details>
+    <details class="fg"><summary><b>Místo na kandidátce</b><span class="val" id="posSum">vše</span></summary>
+      <div class="ddp">
+        <div class="modes" id="posMode"></div>
+        <div id="modeAbs">
+          <p class="hint">Vytištěné číslo kandidáta na hlasovacím lístku.</p>
+          <div class="chipwrap" id="absPre"></div>
+          <div class="rangeRow"><div class="dual" id="absDual"><div class="trk"></div><div class="fil" id="absFil"></div>
+            <input type="range" id="absLo" min="1" max="70" value="1" aria-label="Od pozice">
+            <input type="range" id="absHi" min="1" max="70" value="70" aria-label="Do pozice"></div>
+            <span class="out" id="absOut"></span></div>
+        </div>
+        <div id="modeRel" hidden>
+          <p class="hint">Kde na své kandidátce kandidát stojí nezávisle na její délce: 0&nbsp;% je první, 100&nbsp;% poslední.</p>
+          <div class="chipwrap" id="relPre"></div>
+          <div class="rangeRow"><div class="dual" id="relDual"><div class="trk"></div><div class="fil" id="relFil"></div>
+            <input type="range" id="relLo" min="0" max="100" value="0" aria-label="Od podílu">
+            <input type="range" id="relHi" min="0" max="100" value="100" aria-label="Do podílu"></div>
+            <span class="out" id="relOut"></span></div>
+        </div>
+      </div></details>
+  </form>
+</section>
+
+<section id="head"></section>
+
+<section class="search">
+  <h2>Prohlédnout si konkrétní kandidátku</h2>
+  <p class="sub">Napište název obce. Filtry se tu neuplatní, kromě roku.</p>
+  <input type="text" id="q" placeholder="např. Syrov, Ostrava, Praha 6…" aria-label="Název obce">
+  <ul class="hits" id="hits"></ul>
+  <div id="detail"></div>
+</section>
+
+<section>
+  <h2>Co překročení hranice přineslo</h2>
+  <p class="sub">Překročení hranice samo o sobě mandát nepřináší. Záleží ještě na tom, kolik mandátů kandidátka získala a jestli by kandidát nebyl zvolen i bez něj.</p>
+  <div class="fun" id="fun"></div>
+  <div style="margin-top:14px"><div class="stack" id="stack"></div><div class="skey" id="skey"></div></div>
+</section>
+
+<section>
+  <h2>Podle velikosti obce</h2>
+  <p class="sub">Podíl mandátů, které přeskočení obsadilo jinak, než by je obsadilo pořadí na kandidátce. Filtr velikosti se zde neuplatní, zvýrazněné je pásmo, které máte vybrané.</p>
+  <svg class="chart" id="bandChart" role="img" aria-label="Podle velikosti obce"></svg>
+</section>
+
+<footer>
+  <p><b>Jak to počítáme?</b> Pro každou kandidátku je z otevřených dat ČSÚ znovu spočítán postup podle §&nbsp;45 odst.&nbsp;3 a 4 zákona č.&nbsp;491/2001&nbsp;Sb.: průměr hlasů na kandidáta, hranice zvýšená o desetinu celé části průměru, přesun kandidátů nad hranicí na začátek pořadí a doplnění zbytku mandátů podle pořadí na lístku. Proti tomu stojí týž počet mandátů rozdělený striktně podle pořadí na kandidátce. Přepočet plně reprodukuje oficiální přidělení mandátů ČSÚ.</p>
+  <p>Počet mandátů kandidátky je sám výsledkem hlasů voličů přepočítaný d'Hondtovou metodou a ve všech porovnáních se drží stejný. Měří se vliv voličů na výběr osob uvnitř kandidátky, ne jejich vliv na výsledek voleb jako celek.</p>
+  <p class="src"><b>Zdroj dat:</b> otevřená data ČSÚ, volby.gov.cz – volby do zastupitelstev obcí <span class="roky">2006–2022</span>, jen řádné volby. Názvy kandidátek z registru kandidátních listin ČSÚ.</p>
+  <div class="sig">
+    <a href="https://www.ih21.org" target="_blank" rel="noopener"><img alt="Institut H21" src="assets/h21-logo.png"></a>
+  </div>
+</footer>
+</template>
+</div>
+<script src="assets/krizkometr.js?v=2026-10-07"></script>
+</body>
+</html>

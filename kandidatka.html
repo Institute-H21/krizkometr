@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Křížkometr – kandidátky ve vaší obci</title>
+<meta name="description" content="Kolik mandátů v komunálních volbách rozhodli voliči přeskočením a kolik pořadí na kandidátce. Volby do zastupitelstev obcí od roku 2006, data ČSÚ.">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="stylesheet" href="assets/krizkometr.css?v=2026-10-07">
+</head>
+<body data-view="kandidatka">
+<div class="wrap">
+<div id="boot">Načítám data…</div>
+<template id="tpl">
+
+<section class="search">
+  <h2>Prohlédnout si konkrétní kandidátku</h2>
+  <p class="sub">Napište název obce a vyberte kandidátku. U každé uvidíte, kdo dostal kolik hlasů a proč mandáty připadly právě těm, komu připadly.</p>
+  <input type="text" id="q" placeholder="např. Syrov, Ostrava, Praha 6…" aria-label="Název obce">
+  <ul class="hits" id="hits"></ul>
+  <div id="detail"></div>
+</section>
+
+<footer class="minifoot">
+  <img src="assets/krizkometr-logo.svg" alt="Křížkometr" onerror="var s=document.createElement('span');s.className='wordmark';s.textContent='Křížkometr';this.replaceWith(s)">
+  <a href="https://www.ih21.org" target="_blank" rel="noopener"><img src="assets/h21-logo.png" alt="Institut H21"></a>
+</footer>
+</template>
+</div>
+<script src="assets/krizkometr.js?v=2026-10-07"></script>
+</body>
+</html>
