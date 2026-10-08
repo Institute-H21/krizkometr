@@ -17,15 +17,18 @@
 
 <section class="search">
   <h2>Prohlédnout si konkrétní kandidátku</h2>
-  <p class="sub">Napište název obce a vyberte kandidátku. U každé uvidíte, kdo dostal kolik hlasů a proč mandáty připadly právě těm, komu připadly.</p>
-  <input type="text" id="q" placeholder="např. Syrov, Ostrava, Praha 6…" aria-label="Název obce">
+  <p class="sub">Napište název obce nebo jméno kandidáta a vyberte kandidátku. U každé uvidíte, kdo dostal kolik hlasů a proč mandáty připadly právě těm, komu připadly.</p>
+  <input type="text" id="q" placeholder="např. Syrov, Praha 6 nebo příjmení…" aria-label="Název obce nebo jméno kandidáta">
   <ul class="hits" id="hits"></ul>
   <div id="detail"></div>
 </section>
 
 <footer class="minifoot">
-  <img src="assets/krizkometr-logo.svg" alt="Křížkometr" onerror="var s=document.createElement('span');s.className='wordmark';s.textContent='Křížkometr';this.replaceWith(s)">
-  <a href="https://www.ih21.org" target="_blank" rel="noopener"><img src="assets/h21-logo.png" alt="Institut H21"></a>
+  <div class="logos">
+    <img src="assets/krizkometr-logo.svg" alt="Křížkometr" onerror="var s=document.createElement('span');s.className='wordmark';s.textContent='Křížkometr';this.replaceWith(s)">
+    <a href="https://www.ih21.org" target="_blank" rel="noopener"><img src="assets/h21-logo.png" alt="Institut H21"></a>
+  </div>
+  <p class="src"><b>Zdroj dat:</b> otevřená data ČSÚ, volby.gov.cz – volby do zastupitelstev obcí <span class="roky">2006–2022</span>, jen řádné volby. Názvy kandidátek z registru kandidátních listin ČSÚ. Přepočet Institut H21.</p>
 </footer>
 </template>
 </div>

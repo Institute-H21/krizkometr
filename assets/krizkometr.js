@@ -8,14 +8,13 @@
 const VERZE="2026-10-07";
 const ASSETS=new URL(".",(document.currentScript&&document.currentScript.src)||location.href);
 const DATA_URL=new URL("../data/",ASSETS);
-const SOUBORY={vysledky:"vysledky.bin",jmena:"jmena.bin",kandidatky:"kandidatky.bin",anekdoty:"anekdoty.json"};
+const SOUBORY={vysledky:"vysledky.bin",jmena:"jmena.bin",kandidatky:"kandidatky.bin"};
 const VIEW=document.body.dataset.view||"vse";   // vse | pruzkumnik | grafy | kandidatka
-let META=null,D=null,anecOpen=false,searchRefresh=null,anecMode="weak",anecIdx=0,booted=false;
+let META=null,D=null,anecOpen=false,searchRefresh=null,anecMode="gap",anecIdx=0,booted=false;
 // jména leží ve zvláštním souboru; stáhnou se teprve, když si je někdo vyžádá
-let NAMES=null,namesPromise=null,namesFailed=false;
+let NAMES=null,namesPromise=null,namesFailed=false,onNames=null;
 // plné názvy kandidátek z registru ČSÚ a krátké štítky do tlačítek
 let LISTS=null,listsPromise=null;
-let CUR=[],PASS=null;          // ručně vybrané anekdoty; které kandidátky prošly filtry
 const BANDS=[[0,200],[200,500],[500,1000],[1000,2000],[2000,5000],[5000,10000],
              [10000,20000],[20000,50000],[50000,150000],[150000,1000000],[1000000,1e9]];
 const BLAB=["do 199","200–499","500–999","1 000–1 999","2 000–4 999","5 000–9 999",
@@ -25,7 +24,6 @@ const fmt=new Intl.NumberFormat("cs-CZ");
 const pc=x=>(Math.round(x*10)/10).toLocaleString("cs-CZ",{minimumFractionDigits:1,maximumFractionDigits:1});
 const $=id=>document.getElementById(id);
 
-function b64(s){const b=atob(s),n=b.length,o=new Uint8Array(n);for(let i=0;i<n;i++)o[i]=b.charCodeAt(i);return o;}
 async function gunzip(by){const st=new Blob([by]).stream().pipeThrough(new DecompressionStream("gzip"));
   return new Uint8Array(await new Response(st).arrayBuffer());}
 // GitHub Pages posílá .bin tak, jak leží; soubory jsou zabalené gzipem
@@ -76,23 +74,14 @@ function prefetchNames(){
   if("requestIdleCallback" in window)requestIdleCallback(go,{timeout:2500});
   else setTimeout(go,400);
 }
-function ensureNames(force){
-  if(namesPromise) return namesPromise;
-  if(namesFailed&&!force) return null;
-  namesFailed=false;
-  namesPromise=loadNames().then(()=>{render();if(searchRefresh)searchRefresh();});
+function ensureNames(){
+  if(namesPromise||namesFailed) return namesPromise;
+  namesPromise=loadNames().then(()=>{render();if(searchRefresh)searchRefresh();if(onNames)onNames();});
   return namesPromise;
-}
-let inlineWait=null;
-window.__onNames=()=>{if(inlineWait){const f=inlineWait;inlineWait=null;f();}};
-function namesBytes(){
-  if(!window.__NINLINE) return fetchBytes(SOUBORY.jmena);
-  const take=()=>{const b=b64(window.__N);delete window.__N;return gunzip(b);};
-  return window.__N?take():new Promise(res=>{inlineWait=()=>res(take());});
 }
 async function loadNames(){
   try{
-    const raw=await namesBytes();
+    const raw=await fetchBytes(SOUBORY.jmena);
     const dv=new DataView(raw.buffer,raw.byteOffset,raw.byteLength);
     const n=dv.getUint32(0,true),ls=dv.getUint32(8,true),lg=dv.getUint32(12,true);
     let o=16;
@@ -103,14 +92,14 @@ async function loadNames(){
       for(let i=0;i<k;i++)a[i]=raw[b0+i]|(raw[b1+i]<<8)|(raw[b2+i]<<16)|(raw[b3+i]*16777216);
       o+=4*k;return a;};
     const si=pl(n),gi=pl(n);
-    NAMES={of:ix=>((sur[si[ix]]||"")+" "+(giv[gi[ix]]||"")).trim()};
+    // příjmení a křestní jména leží v tabulkách bez opakování; přes ně se i hledá
+    NAMES={of:ix=>((sur[si[ix]]||"")+" "+(giv[gi[ix]]||"")).trim(),sur,giv,si,gi};
   }catch(e){ namesPromise=null; namesFailed=true; }
 }
 function ensureLists(){
   if(LISTS||listsPromise) return listsPromise;
-  const src=window.__K?gunzip(b64(window.__K)):fetchBytes(SOUBORY.kandidatky);
-  listsPromise=Promise.resolve(src).then(raw=>{
-    const j=JSON.parse(new TextDecoder().decode(raw));delete window.__K;
+  listsPromise=fetchBytes(SOUBORY.kandidatky).then(raw=>{
+    const j=JSON.parse(new TextDecoder().decode(raw));
     LISTS={full:l=>j.f[j.fi[l]]||"",
            lab:l=>{const s=j.si[l];return s===-1?"":s===-2?j.f[j.fi[l]]:j.s[s];}};
     render();
@@ -118,10 +107,6 @@ function ensureLists(){
   return listsPromise;
 }
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-// odstavce oddělené prázdným řádkem, **tučně**
-// pevné mezery: tisíce se neroztrhnou a jednopísmenné předložky nezůstanou na konci řádku
-const nb=s=>s.replace(/(\d) (?=\d{3}\b)/g,"$1\u00a0").replace(/(?<=^|\s)([vkszouaiVKSZOUAI]) /g,"$1\u00a0");
-const txt=s=>String(s).split(/\n\s*\n/).map(p=>"<p>"+nb(esc(p.trim())).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>")+"</p>").join("");
 // tlačítko kandidátky: zkratka, a kde se v obci opakuje (SNK, NK…), i kus vlastního názvu
 function listChip(l,i){
   const a=D.abbr[l],lab=LISTS?LISTS.lab(l):"";
@@ -223,7 +208,6 @@ function scan(){
            elBelow:0,needed:0,beatLists:0,seatLists:0,munis:new Set()};
   const B={m:new Float64Array(NB),d:new Float64Array(NB)};
   const EX=[];                              // všechny paradoxy ve výběru
-  if(!PASS||PASS.length!==L)PASS=new Uint8Array(L);else PASS.fill(0);
   for(let l=0;l<L;l++){
     if(tm&&!(tm&mask[l]))continue;
     const ln=n[l];if(!ln)continue;
@@ -264,7 +248,7 @@ function scan(){
     R.cand+=cand;R.el+=el;R.jump+=jump;R.idle+=idle;R.cl+=cl;R.high+=high;R.beat+=beat;
     R.noSeat+=noSeat;R.short+=shortf;R.elBelow+=elBelow;R.needed+=needed;
     if(seats[l]>0){R.seatLists++;if(beat>0)R.beatLists++;}
-    R.munis.add(mi[l]);PASS[l]=1;
+    R.munis.add(mi[l]);
     // anecdote: worst-ranked elected vs best-ranked unelected ON THE SAME LIST,
     // ignoring the position filters (the pair is a comparison of two positions)
     let wEl=-1,bNe=-1;
@@ -277,14 +261,14 @@ function scan(){
     if(wEl>=0&&bNe>=0&&votes[bNe]>votes[wEl])
       EX.push({l,iEl:wEl,iNe:bNe,r:votes[wEl]/Math.max(av,1e-9),gap:votes[bNe]-votes[wEl]});
   }
-  EX.sort(anecMode==="gap"?(x,y)=>y.gap-x.gap||x.r-y.r:(x,y)=>x.r-y.r||y.gap-x.gap);
+  EX.sort(exCmp());
   return {R,B,EX};
 }
 
 /* ------------------------------------------------- list breakdown (shared) */
 function listTable(l,marks){
   if(!LISTS)ensureLists();
-  const {off,n,pos,votes,seats,bEl,bOr,bCl,mi,abbr,names,pop,mand}=D;
+  const {off,n,pos,votes,seats,bEl,bCl,mi,names,pop,mand}=D;
   const ln=n[l],av=avgOf(l),thr=thrOf(l),o=off[l];
   let rows="";
   for(let i=0;i<ln;i++){
@@ -301,7 +285,7 @@ function listTable(l,marks){
     +(isSplit(l)?`volební obvod ${D.mward[mi[l]]}, ${mand[l]} ${md(mand[l])} · `
                 :`zastupitelstvo o ${mand[l]} členech · `)
     +`kandidátka ${listName(l)}</p>`
-    +`<p class="lmeta">${fmt.format(D.pv[l])} hlasů na ${ln} kandidátů · průměr `
+    +`<p class="lmeta">${fmt.format(D.pv[l])} ${hl(D.pv[l])} na ${ln} ${pl(ln,"kandidáta","kandidáty","kandidátů")} · průměr `
     +`${av.toLocaleString("cs-CZ",{maximumFractionDigits:2})}, hranice `
     +`${thr.toLocaleString("cs-CZ",{maximumFractionDigits:1})} ${Number.isInteger(thr)?hl(thr):"hlasu"} · získala ${seats[l]} ${md(seats[l])}</p>`
     +`<table class="lt"><thead><tr><th>Místo</th><th>Hlasů</th>`
@@ -311,7 +295,7 @@ function listTable(l,marks){
     +`<div class="story">${listStory(l)}</div>`;
 }
 function listStory(l){
-  const {off,n,pos,votes,seats,bEl,bOr,bCl}=D;
+  const {off,n,votes,seats,bEl,bOr,bCl}=D;
   const ln=n[l],o=off[l],M=seats[l],thr=thrOf(l);
   if(M===0) return "Kandidátka nezískala žádný mandát, takže se pořadí na ní vůbec nestanovovalo. "
     +"Sloupec „nad hranicí“ je tu jen pro srovnání – na nic neměl vliv.";
@@ -333,7 +317,7 @@ function listStory(l){
   else if(moved>0){
     const kolik=moved===clUnder
       ? `takže ${moved===1?"jeden mandát změnil":fmt.format(moved)+" "+md(moved)+" "+pl(moved,"změnil","změnily","změnilo")} majitele`
-      : `na mandát ${moved===1?"z nich ale dosáhl jen jeden":"z nich ale dosáhli jen "+fmt.format(moved)}, takže tolik mandátů změnilo majitele`;
+      : `na mandát z nich ale ${moved===1?"dosáhl jen jeden, takže ten změnil":"dosáhli jen "+fmt.format(moved)+", takže tolik mandátů změnilo"} majitele`;
     s=`Hranici ${prek(cl)} ${cl} ${kand(cl)}, z toho ${clUnder} z míst pod čarou. `
      +`${clUnder===1?"Ten se posunul":"Ti se posunuli"} na začátek pořadí, ${kolik}.`+vic;
   }
@@ -368,21 +352,20 @@ function cutText(R){
       :[...S.rivals].sort((a,b)=>a-b).map(i=>RIV[i][0]).join(", ")+" kandidátek v obci",
     S.tags.size?[...S.tags].join(", "):"všechny kandidátky",
     posAll()?"všechna místa":posTxt(),
-    `${fmt.format(R.munis.size)} zastupitelstev`].filter(Boolean).join(" · ");
+    `${fmt.format(R.munis.size)} ${pl(R.munis.size,"zastupitelstvo","zastupitelstva","zastupitelstev")}`].filter(Boolean).join(" · ");
 }
-function header(R,A,nEx){
-  const cut=cutText(R);
+function hero(R){
   const rest=R.el-R.jump-R.idle;
   const sh=v=>R.el?pc(100*v/R.el)+" %":"–";
-  let h=`<p class="cutline">${cut}</p><div class="hero">${dotPlot(R)}<div class="tally">`
+  return `<p class="cutline">${cutText(R)}</p><div class="hero">${dotPlot(R)}<div class="tally">`
     +`<div class="big3">`
-    +`<div><span class="n">${fmt.format(R.cand)}</span><span class="l">lidí kandidovalo</span></div>`
+    +`<div><span class="n">${fmt.format(R.cand)}</span><span class="l">kandidatur</span></div>`
     +`<div><span class="n">${fmt.format(R.el)}</span><span class="l">z nich získalo mandát</span></div>`
     +`<div><span class="n hot">${fmt.format(R.jump)}</span><span class="l">z nich díky `
     +`<span class="term" data-tip="Překročili hranici a posunuli se tím v pořadí na místo, které jim mandát přineslo.">přeskočení</span></span></div>`
     +`</div>`
     +`<p class="rest">Dalších <b>${fmt.format(R.idle)}</b> (${sh(R.idle)}) zvolených hranici také `
-    +`překročilo, mandát by ale dostali i bez toho. Zbylých <b>${fmt.format(rest)}</b> (${sh(rest)}) `
+    +`překročilo, mandát by ale získali i podle pořadí. Zbylých <b>${fmt.format(rest)}</b> (${sh(rest)}) `
     +`zvolených na hranici nedosáhlo; <b>${fmt.format(R.elBelow)}</b> (${sh(R.elBelow)}) `
     +`nedosáhlo ani na průměr na své kandidátce.</p>`
     +`<p class="defn"><b>Hranice</b> se počítá z průměrného počtu hlasů na jednoho kandidáta téže `
@@ -390,33 +373,30 @@ function header(R,A,nEx){
     +`se na začátek pořadí; kdo ne, bere se v pořadí, které sestavila strana. Kvůli tomu zaokrouhlení `
     +`je hranice o něco níž než 110 % skutečného průměru, u malých kandidátek i znatelně.</p>`
     +`</div></div>`;
-  if(A){
-    const l=A.l,ok=okrOf(D.mi[l]);
-    const where=`<b>${esc(D.names[D.mi[l]])}</b> (${ok?"okres "+esc(ok)+", ":""}${fmt.format(D.pop[l])} obyvatel), `
-      +`volby <b>${META.years[D.yr[l]]}</b>, kandidátka ${listInline(l)}`;
-    // šipky stojí nad příkladem vlevo, takže se při rozbalení kandidátky neposouvají
-    h+=`<div class="anec-nav"><span class="pager"><button type="button" id="anecPrev" aria-label="Předchozí příklad">‹</button>`
-      +`<span>${fmt.format(anecIdx+1)} z ${fmt.format(nEx)}</span>`
-      +`<button type="button" id="anecNext" aria-label="Další příklad">›</button></span>`
-      +`<span class="chipwrap" id="anecMode">`
-      +`<button type="button" class="chip" data-m="weak" aria-pressed="${anecMode==="weak"}">nejslabší vítěz</button> `
-      +`<button type="button" class="chip" data-m="gap" aria-pressed="${anecMode==="gap"}">největší rozdíl</button></span></div>`;
-    h+=`<div class="anec${A.cur?" cur":""}">`;
-    if(A.cur) h+=`<p class="ameta">${where}</p><p class="atit">${esc(A.cur.titulek)}</p>${txt(A.cur.text)}`;
-    else{
-      const av=avgOf(l),p=D.pos,vE=D.votes[A.iEl],vN=D.votes[A.iNe];
-      h+=`${where}: na <b>${p[A.iEl]}. místě</b> dostal kandidát `
-        +`<b>${fmt.format(vE)}</b> ${hl(vE)}, tedy ${Math.round(100*vE/av)} % průměru kandidátky, `
-        +`a mandát získal. Na <b>${p[A.iNe]}. místě</b> dostal kandidát <b>${fmt.format(vN)}</b> ${hl(vN)} `
-        +`(${Math.round(100*vN/av)} %) a mandát nezískal.`;
-    }
-    h+=`<div class="more"><details id="anecDet"${anecOpen?" open":""}><summary>Zobrazit celou kandidátku</summary>`
-      +`<div id="anecList"></div></details></div></div>`;
-    h+=`<p class="gen">Kandidátů, kteří měli víc hlasů než někdo zvolený z&nbsp;jejich vlastní `
-      +`kandidátky, a přesto zvoleni nebyli, je ve výběru <b>${fmt.format(R.beat)}</b>. `
-      +`Stalo se to na <b>${fmt.format(R.beatLists)}</b> kandidátkách `
-      +`z&nbsp;${fmt.format(R.seatLists)}, které nějaký mandát získaly.</p>`;
-  }
+}
+function examples(R,A,nEx){
+  if(!A) return "";
+  const l=A.l,ok=okrOf(D.mi[l]);
+  const where=`<b>${esc(D.names[D.mi[l]])}</b> (${ok?"okres "+esc(ok)+", ":""}${fmt.format(D.pop[l])} obyvatel), `
+    +`volby <b>${META.years[D.yr[l]]}</b>, kandidátka ${listInline(l)}`;
+  // šipky stojí nad příkladem vlevo, takže se při rozbalení kandidátky neposouvají
+  let h=`<div class="anec-nav"><span class="pager"><button type="button" id="anecPrev" aria-label="Předchozí příklad">‹</button>`
+    +`<span>${fmt.format(anecIdx+1)} z ${fmt.format(nEx)}</span>`
+    +`<button type="button" id="anecNext" aria-label="Další příklad">›</button></span>`
+    +`<span class="chipwrap" id="anecMode">`
+    +`<button type="button" class="chip" data-m="gap" aria-pressed="${anecMode==="gap"}">největší rozdíl</button> `
+    +`<button type="button" class="chip" data-m="weak" aria-pressed="${anecMode==="weak"}">nejslabší vítěz</button></span></div>`;
+  const av=avgOf(l),p=D.pos,vE=D.votes[A.iEl],vN=D.votes[A.iNe];
+  h+=`<div class="anec">${where}: na <b>${p[A.iEl]}. místě</b> dostal kandidát `
+    +`<b>${fmt.format(vE)}</b> ${hl(vE)}, tedy ${Math.round(100*vE/av)} % průměru kandidátky, `
+    +`a mandát získal. Na <b>${p[A.iNe]}. místě</b> dostal kandidát <b>${fmt.format(vN)}</b> ${hl(vN)} `
+    +`(${Math.round(100*vN/av)} %) a mandát nezískal.`;
+  h+=`<div class="more"><details id="anecDet"${anecOpen?" open":""}><summary>Zobrazit celou kandidátku</summary>`
+    +`<div id="anecList"></div></details></div></div>`;
+  h+=`<p class="gen">Kandidátů, kteří měli víc hlasů než někdo zvolený z&nbsp;jejich vlastní `
+    +`kandidátky, a přesto zvoleni nebyli, je ve výběru <b>${fmt.format(R.beat)}</b>. `
+    +`Stalo se to na <b>${fmt.format(R.beatLists)}</b> ${R.beatLists===1?"kandidátce":"kandidátkách"} `
+    +`z&nbsp;${fmt.format(R.seatLists)}, ${R.seatLists===1?"která nějaký mandát získala":"které nějaký mandát získaly"}.</p>`;
   return h;
 }
 
@@ -424,19 +404,23 @@ function dotPlot(R){
   // three concentric rings; dots are laid out by angle, so each category
   // forms one clean wedge and the proportions read like a pie you can count
   const RINGS=[[30,74],[38,93],[46,112]];
-  let want=RINGS.reduce((a,r)=>a+r[0],0);
+  const full=RINGS.reduce((a,r)=>a+r[0],0);
   let rings=RINGS;
-  if(R.el<want){const k=R.el/want;
-    rings=RINGS.map(([c,r])=>[Math.max(1,Math.round(c*k)),r]);
-    want=rings.reduce((a,r)=>a+r[0],0);}
-  const per=R.el/want;
+  // méně zvolených než teček: každá tečka je právě jeden mandát a na kruhy se
+  // rozdělí úměrně jejich velikosti (zbytek dostanou kruhy s největší desetinnou částí)
+  if(R.el<full){
+    const want=RINGS.map(([c])=>c*R.el/full),cnt=want.map(w=>Math.floor(w));
+    const left=R.el-cnt.reduce((a,b)=>a+b,0);
+    want.map((w,i)=>[w-cnt[i],i]).sort((x,y)=>y[0]-x[0]).slice(0,left).forEach(([,i])=>cnt[i]++);
+    rings=RINGS.map(([,r],i)=>[cnt[i],r]);}
+  const dots=rings.reduce((a,r)=>a+r[0],0),per=dots?R.el/dots:0;
   const pts=[];
   rings.forEach(([cnt,rad])=>{for(let k=0;k<cnt;k++)pts.push({a:(k+0.5)/cnt,rad});});
   pts.sort((x,y)=>x.a-y.a);
   const mid=R.el-R.jump-R.idle-R.elBelow;         // nad průměrem, pod hranicí
   const G=[["zvolen díky přeskočení",R.jump,"získalo mandát přeskočením."],
-           ["dosáhl na hranici, mandát by měl i tak",R.idle,
-            "dosáhlo na hranici přeskočení, ale mandát by získali i tak."],
+           ["dosáhl na hranici, mandát by měl i podle pořadí",R.idle,
+            "dosáhlo na hranici přeskočení, ale mandát by získali i podle pořadí."],
            ["na hranici nedosáhl, na průměr ano",mid,
             "získalo mandát, aniž by dosáhli na hranici přeskočení. Průměr kandidátky překročili."],
            ["nedosáhl ani na průměr kandidátky",R.elBelow,
@@ -459,9 +443,12 @@ function dotPlot(R){
   d+=`<circle cx="${CX}" cy="${CY}" r="66" fill="var(--bg)"/>`
     +`<text class="ctr-n" x="${CX}" y="${CY+3}">${pc(share)} %</text>`
     +`<text class="ctr-l" x="${CX}" y="${CY+23}">mandátů díky přeskočení</text>`;
-  const each=`Tečky jsou zvolení zastupitelé. `+(per>1.5
-    ?`Každá zastupuje ${fmt.format(Math.round(per))} ${md(Math.round(per))}.`
-    :`Každá zastupuje jeden mandát.`);
+  // víc zvolených než teček: tečka zastupuje několik mandátů, číslo je zaokrouhlené
+  const p1=Math.round(per*10)/10,pr=Math.round(per);
+  const each=!R.el?`Ve výběru nikdo nezískal mandát.`
+    :`Tečky jsou zvolení zastupitelé. `+(per===1?`Každá zastupuje jeden mandát.`
+    :per<10?`Každá zastupuje přibližně ${p1.toLocaleString("cs-CZ")} ${Number.isInteger(p1)?md(p1):"mandátu"}.`
+    :`Každá zastupuje přibližně ${fmt.format(pr)} ${md(pr)}.`);
   return `<div><svg class="donut" viewBox="0 0 250 250" role="img" `
     +`aria-label="Podíl mandátů získaných přeskočením">${d}</svg>`
     +`<p class="dotkey">`+G.map(([lab,v],i)=>{
@@ -494,9 +481,9 @@ function funnel(R){
     ["jejich kandidátka nezískala mandát",R.noSeat,"var(--surface-2)",
       `${fmt.format(R.noSeat)} skokanů bylo na kandidátce, která neuspěla jako celek. Nezískal z ní mandát nikdo, takže přeskočení nemělo žádný následek.`]];
   const tot=seg.reduce((a,s)=>a+s[1],0)||1;
-  $("stack").innerHTML=seg.map(([lab,v,c,tip])=>
+  $("stack").innerHTML=seg.map(([,v,c,tip])=>
     `<div style="width:${100*v/tot}%;background:${c}" data-tip="${tip}"></div>`).join("");
-  $("skey").innerHTML=seg.map(([lab,v,c])=>
+  $("skey").innerHTML=seg.map(([lab,,c])=>
     `<span><i style="background:${c}"></i><span>${lab}</span></span>`).join("");
 }
 function bandChart(B){
@@ -523,6 +510,22 @@ function bandChart(B){
   const c=$("bandChart");c.setAttribute("viewBox",`0 0 ${W} ${h}`);c.innerHTML=s;
 }
 /* ----------------------------------------------------------------- render */
+// příklady se listují bez nového průchodu daty a bez překreslení teček nad nimi
+let EXS=[],RS=null,heroHtml="";
+const exCmp=()=>anecMode==="gap"?(x,y)=>y.gap-x.gap||x.r-y.r:(x,y)=>x.r-y.r||y.gap-x.gap;
+function drawExamples(){
+  const box=$("exBox");if(!box)return;
+  if(anecIdx>=EXS.length)anecIdx=0;
+  const A=EXS.length?EXS[anecIdx]:null;
+  box.innerHTML=examples(RS,A,EXS.length);
+  if(!A)return;
+  $("anecList").innerHTML=listTable(A.l,new Set([A.iEl,A.iNe]));
+  $("anecDet").addEventListener("toggle",e=>{anecOpen=e.target.open;if(anecOpen)ensureNames();postHeight();});
+  $("anecMode").onclick=e=>{const b=e.target.closest("button[data-m]");if(!b||b.dataset.m===anecMode)return;
+    anecMode=b.dataset.m;EXS.sort(exCmp());anecIdx=0;drawExamples();postHeight();};
+  $("anecPrev").onclick=()=>{anecIdx=(anecIdx-1+EXS.length)%EXS.length;drawExamples();postHeight();};
+  $("anecNext").onclick=()=>{anecIdx=(anecIdx+1)%EXS.length;drawExamples();postHeight();};
+}
 function render(){
   if(!booted)return;
   const head=$("head"),fun=$("fun"),band=$("bandChart");
@@ -538,26 +541,11 @@ function render(){
     if(band)bandChart(B);
     postHeight();return;}
   if(head){
-  // ručně vybrané příběhy jdou první, pokud spadají do výběru, za nimi ostatní paradoxy
-  const AX=CUR.filter(c=>PASS[c.l]).map(c=>({l:c.l,cur:c,marks:c.marks}));
-  const seen=new Set(AX.map(a=>a.l));
-  EX.forEach(e=>{if(!seen.has(e.l))AX.push({l:e.l,iEl:e.iEl,iNe:e.iNe,marks:new Set([e.iEl,e.iNe])});});
-  if(anecIdx>=AX.length)anecIdx=0;
-  const A=AX.length?AX[anecIdx]:null;
-  head.innerHTML=header(R,A,AX.length);
-  if(A&&$("anecList")){
-    $("anecList").innerHTML=listTable(A.l,A.marks);
-    $("anecDet").addEventListener("toggle",e=>{
-      const zmena=e.target.open!==anecOpen;
-      anecOpen=e.target.open;
-      // jen když se stahování opravdu rozběhlo, jinak by se přepsala hláška o chybě
-      if(e.target.open&&zmena)ensureNames();
-      postHeight();});
-    $("anecMode").onclick=e=>{const b=e.target.closest("button[data-m]");if(!b)return;
-      anecMode=b.dataset.m;anecIdx=0;render();};
-    $("anecPrev").onclick=()=>{anecIdx=(anecIdx-1+AX.length)%AX.length;render();};
-    $("anecNext").onclick=()=>{anecIdx=(anecIdx+1)%AX.length;render();};
-  }
+    if(!$("heroBox")){head.innerHTML='<div id="heroBox"></div><div id="exBox"></div>';heroHtml="";}
+    // tečky se překreslí (a znovu rozběhnou) jen tehdy, když se změnila čísla
+    const hh=hero(R);
+    if(hh!==heroHtml){$("heroBox").innerHTML=hh;heroHtml=hh;}
+    EXS=EX;RS=R;drawExamples();
   }
   if(fun)funnel(R);
   if(band)bandChart(B);
@@ -606,7 +594,7 @@ function setupSearch(){
   const idx=[...byMuni.keys()].map(m=>({m,name:nameOf(m),key:skey(nameOf(m)),
     full:norm(nameOf(m)),mand:size(m)}));
   const q=$("q"),hits=$("hits"),detail=$("detail");
-  let curMuni=null,curList=null;
+  let curMuni=null,curList=null,found=null;
   const chipFor=(l,i)=>{
     const f=LISTS?LISTS.full(l):"",same=!f||f.toLowerCase()===(D.abbr[l]||"").toLowerCase();
     return `<button type="button" class="chip" data-l="${l}" aria-pressed="false"${same?"":` data-tip="${esc(f)}"`}>`
@@ -643,29 +631,81 @@ function setupSearch(){
     const draw=l=>{curList=l;
       [...$("lchips").querySelectorAll("button[data-l]")].forEach(x=>
         x.setAttribute("aria-pressed",+x.dataset.l===l));
-      $("lbody").innerHTML=listTable(l);postHeight();};
+      // kandidát nalezený podle jména je v tabulce zvýrazněný
+      $("lbody").innerHTML=listTable(l,found&&found.l===l?new Set([found.ix]):null);postHeight();};
     $("lchips").onclick=e=>{const b=e.target.closest("button[data-l]");if(!b)return;draw(+b.dataset.l);};
     draw(curList);
   }
   searchRefresh=()=>{if(curMuni!==null)show(curMuni,true);};
-  q.addEventListener("input",()=>{
-    ensureNames();ensureLists();
+
+  // hledání podle jména: každé slovo dotazu musí být začátkem některého slova
+  // v příjmení nebo křestním jménu; prochází se tabulky jmen bez opakování,
+  // takže stačí jeden průchod kandidáty s předem spočítanými shodami
+  let nIdx=null;
+  const NMAX=15;
+  function findNames(v){
+    const {sur,giv,si,gi}=NAMES;
+    if(!nIdx){const w=s=>" "+norm(s).replace(/-/g," ");nIdx={sur:sur.map(w),giv:giv.map(w)};}
+    const toks=v.split(" ").filter(Boolean),K=toks.length;
+    // 1 = slovo začíná dotazem, 2 = slovo je celé shodné
+    const hit=(arr,t)=>{const a=new Uint8Array(arr.length),p=" "+t,e=p+" ";
+      for(let i=0;i<arr.length;i++){const s=arr[i];if(s.includes(p))a[i]=(s+" ").includes(e)?2:1;}return a;};
+    const TS=toks.map(t=>hit(nIdx.sur,t)),TG=toks.map(t=>hit(nIdx.giv,t));
+    const anyY=S.years.size===0,top=[];let count=0;
+    for(let l=0;l<D.L;l++){
+      if(!anyY&&!S.years.has(D.yr[l]))continue;
+      const o=D.off[l];
+      for(let ix=o;ix<o+D.n[l];ix++){
+        let ex=0,ok=true;
+        for(let k=0;k<K;k++){const s=TS[k][si[ix]],g=TG[k][gi[ix]];
+          if(!s&&!g){ok=false;break;}if(s===2||g===2)ex++;}
+        if(!ok)continue;
+        count++;
+        // nahoře celá jména, pak novější volby, zvolení a víc hlasů
+        const key=ex*1e11+D.yr[l]*1e10+bit(D.bEl,ix)*1e9+D.votes[ix];
+        if(top.length<NMAX||key>top[top.length-1].key){
+          top.push({key,ix,l});top.sort((a,b)=>b.key-a.key);if(top.length>NMAX)top.pop();}
+      }
+    }
+    return {top,count};
+  }
+  const muniHit=o=>`<li><button type="button" data-m="${o.m}">${esc(o.name)}`
+    +`<span>${okrOf(D.mi[byMuni.get(o.m)[0]])||"–"} · ${o.mand} zastupitelů</span></button></li>`;
+  const candHit=({ix,l})=>{const ok=okrOf(D.mi[l]);
+    return `<li class="ch"><button type="button" data-c="${ix}" data-l="${l}">${esc(NAMES.of(ix))}`
+      +`<span>${esc(D.names[D.mi[l]])}${ok?" ("+esc(ok)+")":""} · ${META.years[D.yr[l]]} · `
+      +`${esc(D.abbr[l]||"–")} · ${D.pos[ix]}. místo · ${bit(D.bEl,ix)?"s mandátem":"bez mandátu"}</span></button></li>`;};
+  let waitNames=false;
+  function runQuery(){
     const v=norm(q.value.trim());
-    if(v.length<2){hits.innerHTML="";return;}
+    waitNames=false;
+    if(v.length<2){hits.innerHTML="";postHeight();return;}
     const rank=o=>o.key===v?0:(o.key.startsWith(v)||o.full.startsWith(v))?1:2;
     const all=idx.filter(o=>o.key.includes(v)||o.full.includes(v))
       .sort((a,b)=>rank(a)-rank(b) || b.mand-a.mand || a.name.localeCompare(b.name,"cs"));
     const r=all.slice(0,15);
-    const anyY=S.years.size===0;
-    hits.innerHTML=r.length?r.map(o=>{
-      const ll=byMuni.get(o.m).filter(l=>anyY||S.years.has(D.yr[l]));
-      return `<li><button type="button" data-m="${o.m}">${o.name}`
-        +`<span>${okrOf(D.mi[byMuni.get(o.m)[0]])||"–"} · ${o.mand} zastupitelů</span></button></li>`;}).join("")
-      +(all.length>r.length?`<li class="more">a dalších ${all.length-r.length} – upřesněte dotaz</li>`:"")
-      :'<li><button type="button" disabled>Nic nenalezeno</button></li>';
-  });
-  hits.addEventListener("click",e=>{const b=e.target.closest("button[data-m]");if(!b)return;
-    q.value=nameOf(+b.dataset.m);hits.innerHTML="";show(+b.dataset.m,false);});
+    const mh=r.map(muniHit).join("")
+      +(all.length>r.length?`<li class="more">a dalších ${fmt.format(all.length-r.length)} – upřesněte dotaz</li>`:"");
+    let nh="";
+    if(v.length>=3){
+      if(NAMES){const {top,count}=findNames(v);
+        nh=top.map(candHit).join("")
+          +(count>top.length?`<li class="more">a dalších ${fmt.format(count-top.length)} – upřesněte dotaz</li>`:"");}
+      else if(!namesFailed){waitNames=true;nh='<li class="more">Jména kandidátů se ještě načítají…</li>';}
+    }
+    hits.innerHTML=mh&&nh?`<li class="hd">Obce</li>${mh}<li class="hd">Kandidáti</li>${nh}`
+      :mh||nh||'<li><button type="button" disabled>Nic nenalezeno</button></li>';
+    postHeight();
+  }
+  onNames=()=>{if(waitNames)runQuery();};
+  q.addEventListener("input",()=>{ensureNames();ensureLists();runQuery();});
+  hits.addEventListener("click",e=>{
+    const c=e.target.closest("button[data-c]");
+    if(c){const ix=+c.dataset.c,l=+c.dataset.l;
+      found={ix,l};q.value=NAMES.of(ix);hits.innerHTML="";waitNames=false;
+      curList=l;show(D.mcode[D.mi[l]],true);return;}
+    const b=e.target.closest("button[data-m]");if(!b)return;
+    found=null;q.value=nameOf(+b.dataset.m);hits.innerHTML="";waitNames=false;show(+b.dataset.m,false);});
 }
 
 /* --------------------------------------------------------------- controls */
@@ -777,7 +817,7 @@ function boot(){
     const ks=[...S.kraje].sort((a,b)=>META.kraje[a].localeCompare(META.kraje[b],"cs"));
     $("okresBox").hidden=ks.length===0;
     $("okresPre").innerHTML=ks.map(k=>{
-      const ids=META.okresy.map((o,i)=>i).filter(i=>META.okresy[i][1]===k)
+      const ids=META.okresy.map((_,i)=>i).filter(i=>META.okresy[i][1]===k)
         .sort((a,b)=>META.okresy[a][0].localeCompare(META.okresy[b][0],"cs"));
       const cely=!ids.some(i=>S.okresy.has(i));
       return `<div class="krow"><span class="kr">${META.kraje[k]}</span><span class="kch">`
@@ -863,35 +903,10 @@ function boot(){
   if(VIEW==="grafy")siblings({krizkometr:1,typ:"dotaz"});
   if($("q")||$("head"))prefetchNames();
 }
-async function loadCurated(){
-  try{
-    if(window.__A)return window.__A;
-    const r=await fetch(new URL(SOUBORY.anekdoty+"?v="+VERZE,DATA_URL));
-    return r.ok?await r.json():[];
-  }catch(e){return [];}
-}
-// příběh se v datech dohledá podle roku, kódu obce, obvodu, zkratky a počtu kandidátů
-function resolveCurated(j){
-  CUR=[];
-  const arr=Array.isArray(j)?j:(j&&Array.isArray(j.anekdoty)?j.anekdoty:[]);
-  arr.forEach(a=>{
-    const yi=META.years.indexOf(a.rok);if(yi<0)return;
-    for(let l=0;l<D.L;l++){
-      if(D.yr[l]!==yi)continue;const m=D.mi[l];
-      if(D.mcode[m]!==a.kod||D.mward[m]!==(a.obvod||1))continue;
-      if(a.zkratka!=null&&D.abbr[l]!==a.zkratka)continue;
-      if(a.kandidatu&&D.n[l]!==a.kandidatu)continue;
-      const o=D.off[l],marks=new Set(),oz=a.oznacit||[];
-      for(let i=0;i<D.n[l];i++)if(oz.includes(D.pos[o+i]))marks.add(o+i);
-      CUR.push({l,marks,titulek:a.titulek||"",text:a.text||""});break;
-    }
-  });
-}
 (async function(){
   try{
-    const pA=(VIEW==="vse"||VIEW==="pruzkumnik")?loadCurated():Promise.resolve([]);
-    D=parse(window.__P?await gunzip(b64(window.__P)):await fetchBytes(SOUBORY.vysledky));delete window.__P;
-    findSplits();countRivals();resolveCurated(await pA);boot();
+    D=parse(await fetchBytes(SOUBORY.vysledky));
+    findSplits();countRivals();boot();
   }catch(e){$("boot").innerHTML='<div class="empty">Data se nepodařilo načíst ('+esc(e&&e.message||e)
     +'). Stránka potřebuje Chrome, Edge, Firefox&nbsp;113+ nebo Safari&nbsp;16.4+.</div>';}
 })();

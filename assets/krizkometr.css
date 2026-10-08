@@ -1,7 +1,12 @@
 /* Křížkometr – Institut H21 */
-/* Apercu Pro – firemní písmo Institutu H21, oříznuté na znaky, které stránky používají. */
-@font-face{font-family:"Apercu Pro";font-style:normal;font-weight:400;font-display:swap;src:url(apercu-400.woff2) format("woff2")}
-@font-face{font-family:"Apercu Pro";font-style:normal;font-weight:700;font-display:swap;src:url(apercu-700.woff2) format("woff2")}
+/* Apercu Pro (firemní písmo H21) se načítá ze stejného místa jako na webu institutu.
+   Soubory písma v repu záměrně nejsou: je veřejné a písmo má komerční licenci.
+   Když adresa přestane platit (např. po novém nahrání písma ve Webflow),
+   stránky přejdou na systémové písmo a jinak fungují dál. */
+@font-face{font-family:"Apercu Pro";font-style:normal;font-weight:400;font-display:swap;
+  src:url(https://cdn.prod.website-files.com/62a501ab7c276f020734e677/62a506d55f0ebdb5021f10b7_apercu_regular_pro.otf) format("opentype")}
+@font-face{font-family:"Apercu Pro";font-style:normal;font-weight:700;font-display:swap;
+  src:url(https://cdn.prod.website-files.com/62a501ab7c276f020734e677/62a7aba759a85f83d1c07844_ApercuPro-Bold-Web.ttf) format("truetype")}
 
 /* =====================================================================
    BAREVNÉ SCHÉMA – jediné místo, kde se mění vzhled.
@@ -48,12 +53,12 @@ section{margin:0 0 28px}
 .tally .rest b{color:var(--ink)}
 .defn{margin:9px 0 0;font-size:12.5px;color:var(--ink-3);line-height:1.45;max-width:46em;
   border-left:2px solid var(--azure);padding-left:10px}
-.anec{border-left:3px solid var(--hot);padding:10px 0 10px 14px;margin:16px 0 0;
+/* příklady: ovládání nad příkladem vlevo */
+.anec-nav{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin:18px 0 0}
+.anec{border-left:3px solid var(--hot);padding:10px 0 10px 14px;margin:8px 0 0;
   font-size:15.5px;line-height:1.5;max-width:46em}
 .anec b{font-weight:700}
 .anec .more{margin-top:8px}
-.anec-nav{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;
-  gap:10px;margin:10px 0 0;padding-left:17px}
 .pager{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-2)}
 .pager button{font:inherit;font-size:16px;line-height:1;width:28px;height:26px;cursor:pointer;
   background:var(--bg);border:1px solid var(--rule);border-radius:3px;color:var(--ink-2)}
@@ -147,7 +152,6 @@ details[open]>summary{margin-bottom:4px}
 .stack div{height:100%}
 .skey{display:flex;flex-wrap:wrap;gap:4px 18px;margin:8px 0 0;font-size:12.5px;color:var(--ink-2)}
 .skey>span{display:flex;align-items:center;gap:6px}
-.skey b{font-weight:700;color:var(--ink)}
 .skey i{width:11px;height:11px;display:block;flex:0 0 auto}
 
 /* search */
@@ -160,6 +164,12 @@ details[open]>summary{margin-bottom:4px}
 .hits button:hover{color:var(--brand)}
 .hits button span{color:var(--ink-3);font-size:12.5px;white-space:nowrap}
 .hits li.more{font-size:12.5px;color:var(--ink-3);padding:6px 2px;border-bottom:0}
+.hits li.hd{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;
+  color:var(--ink-2);padding:12px 2px 3px}
+.hits li.hd:first-child{padding-top:0}
+/* kandidát: jméno a pod ním obec, rok, kandidátka a výsledek */
+.hits li.ch button{display:block}
+.hits li.ch button span{display:block;white-space:normal;margin-top:1px}
 .yrow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:5px 0;border-top:1px solid var(--rule)}
 .yrow:first-child{border-top:0}
 .yr{flex:0 0 46px;font-size:13px;font-weight:700;color:var(--ink-2)}
@@ -173,11 +183,6 @@ details[open]>summary{margin-bottom:4px}
 .yrow:first-child .wd:first-child{padding-left:0}
 
 svg.chart{display:block;width:100%;max-width:820px;height:auto}
-table.num{border-collapse:collapse;width:100%;font-size:13px;max-width:640px}
-table.num th,table.num td{text-align:right;padding:4px 8px;border-bottom:1px solid var(--rule)}
-table.num th:first-child,table.num td:first-child{text-align:left}
-table.num thead th{font-size:11.5px;color:var(--ink-2);border-bottom:1.5px solid var(--ink-3);
-  font-weight:700;text-transform:uppercase;letter-spacing:.02em}
 footer{border-top:1px solid var(--rule);padding-top:13px;font-size:12px;color:var(--ink-3);line-height:1.5}
 footer p{max-width:62em}
 .src{margin:12px 0 0;font-size:11.5px;color:var(--ink-3);max-width:62em}
@@ -228,18 +233,12 @@ footer b{color:var(--ink-2)}
 .chip.pre{border-radius:999px;padding:8px 15px;font-size:13.5px;color:var(--ink)}
 .chip.pre:hover{color:var(--brand)}
 .chip.pre[aria-pressed="true"]{color:#fff}
-/* anekdoty: ovládání nad příkladem vlevo */
-.anec-nav{justify-content:flex-start;gap:8px 16px;margin:18px 0 0;padding-left:0}
-.anec{margin:8px 0 0}
-.anec .ameta{font-size:13px;color:var(--ink-2);margin:0 0 4px}
-.anec .atit{font-size:17px;font-weight:700;line-height:1.3;margin:0 0 6px}
-.anec.cur p{margin:0 0 8px}
-.anec.cur p.atit{margin-bottom:6px}
 /* tlačítka kandidátek: kus vlastního názvu u opakujících se zkratek */
 .chip .cn{font-weight:400;opacity:.85;margin-left:1px}
 .chip[data-tip]{cursor:pointer}
 /* spodek čtečky kandidátek */
-.minifoot{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
-  margin-top:24px;padding-top:14px;border-top:1px solid var(--rule)}
+.minifoot{margin-top:24px;padding-top:14px;text-align:center}
+.minifoot .logos{display:flex;align-items:center;justify-content:center;gap:16px 32px;flex-wrap:wrap}
 .minifoot img{display:block;height:36px;width:auto}
+.minifoot .src{margin:12px auto 0}
 .minifoot .wordmark{font-size:22px}
