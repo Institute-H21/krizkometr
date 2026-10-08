@@ -758,15 +758,16 @@ addEventListener("message",e=>{
 const LASTY=()=>META.years.length-1;
 function clearS(){["years","bands","tags","kraje","okresy","typy","rivals"].forEach(k=>S[k].clear());
   S.posMode="abs";S.absLo=1;S.absHi=70;S.relLo=0;S.relHi=100;}
-// předvolby si nechávají vybraný rok; „Vše“ ho zruší, „Volby …“ nastaví poslední volby
+// předvolba nastaví celý výběr znovu, i rok: zvýrazněné tlačítko pak odpovídá tomu,
+// co se opravdu počítá (dřív „Volby …“ zhaslo, ale rok ve filtru zůstal)
 const PRESETS=[
   {lab:()=>"Volby "+META.years[LASTY()],set(){S.years.add(LASTY());}},
   {lab:()=>"Vše",set(){}},
-  {lab:()=>"Velká města",keep:1,set(){[8,9,10].forEach(b=>S.bands.add(b));}},
-  {lab:()=>"Obce 5–10 tisíc",keep:1,set(){S.bands.add(5);}},
-  {lab:()=>"Spodní místa na kandidátkách",keep:1,
+  {lab:()=>"Velká města",set(){[8,9,10].forEach(b=>S.bands.add(b));}},
+  {lab:()=>"Obce 5–10 tisíc",set(){S.bands.add(5);}},
+  {lab:()=>"Spodní místa na kandidátkách",
    set(){S.posMode="rel";S.relLo=80;S.relHi=100;[1,2,3,4,5].forEach(r=>S.rivals.add(r));}}];
-function applyPreset(p){const y=[...S.years];clearS();if(p.keep)y.forEach(v=>S.years.add(v));p.set();}
+function applyPreset(p){clearS();p.set();}
 function presetOn(p){const was=ser(),now=JSON.stringify(was);applyPreset(p);
   const would=JSON.stringify(ser());applyState(was);return now===would;}
 function setupPresets(paintAbs,paintRel){
