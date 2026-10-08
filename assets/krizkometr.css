@@ -194,6 +194,8 @@ footer p{max-width:62em}
 .sig a{display:block;width:fit-content;margin:0 auto;line-height:0;opacity:.95;transition:opacity .12s}
 .sig a:hover{opacity:1}
 .sig img{height:46px;width:auto;display:block}
+/* logo na začátku patičky, vysvětlivky a zdroj až pod ním */
+footer>.sig:first-child{margin:8px 0 4px;padding-top:0;border-top:0}
 footer b{color:var(--ink-2)}
 .empty{padding:14px;background:var(--surface);border:1px dashed var(--rule);font-size:13.5px;color:var(--ink-2)}
 #boot{padding:40px 0;color:var(--ink-3);font-size:14px}
