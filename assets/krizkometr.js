@@ -10,7 +10,7 @@ const ASSETS=new URL(".",(document.currentScript&&document.currentScript.src)||l
 const DATA_URL=new URL("../data/",ASSETS);
 const SOUBORY={vysledky:"vysledky.bin",jmena:"jmena.bin",kandidatky:"kandidatky.bin"};
 const VIEW=document.body.dataset.view||"vse";   // vse | pruzkumnik | grafy | kandidatka
-let META=null,D=null,anecOpen=false,searchRefresh=null,anecMode="gap",anecIdx=0,booted=false;
+let META=null,D=null,anecOpen=false,searchRefresh=null,anecMode="weak",anecIdx=0,booted=false;
 // jména leží ve zvláštním souboru; stáhnou se teprve, když si je někdo vyžádá
 let NAMES=null,namesPromise=null,namesFailed=false,onNames=null;
 // plné názvy kandidátek z registru ČSÚ a krátké štítky do tlačítek
@@ -384,8 +384,8 @@ function examples(R,A,nEx){
     +`<span>${fmt.format(anecIdx+1)} z ${fmt.format(nEx)}</span>`
     +`<button type="button" id="anecNext" aria-label="Další příklad">›</button></span>`
     +`<span class="chipwrap" id="anecMode">`
-    +`<button type="button" class="chip" data-m="gap" aria-pressed="${anecMode==="gap"}">největší rozdíl</button> `
-    +`<button type="button" class="chip" data-m="weak" aria-pressed="${anecMode==="weak"}">nejslabší vítěz</button></span></div>`;
+    +`<button type="button" class="chip" data-m="weak" aria-pressed="${anecMode==="weak"}">nejslabší vítěz</button> `
+    +`<button type="button" class="chip" data-m="gap" aria-pressed="${anecMode==="gap"}">největší rozdíl</button></span></div>`;
   const av=avgOf(l),p=D.pos,vE=D.votes[A.iEl],vN=D.votes[A.iNe];
   h+=`<div class="anec">${where}: na <b>${p[A.iEl]}. místě</b> dostal kandidát `
     +`<b>${fmt.format(vE)}</b> ${hl(vE)}, tedy ${Math.round(100*vE/av)} % průměru kandidátky, `
