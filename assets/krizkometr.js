@@ -5,7 +5,7 @@
 // ------------------------------------------------------------- nastavení
 // VERZE: po každé výměně souborů v data/ ji změňte (a totéž číslo v odkazech
 // na skript a styly v HTML), jinak můžou prohlížeče chvíli držet stará data
-const VERZE="2026-10-10";
+const VERZE="2026-10-10b";
 const ASSETS=new URL(".",(document.currentScript&&document.currentScript.src)||location.href);
 const DATA_URL=new URL("../data/",ASSETS);
 const SOUBORY={vysledky:"vysledky.bin",jmena:"jmena.bin",kandidatky:"kandidatky.bin"};
@@ -141,7 +141,7 @@ function watchLive(){
       if((B.meta.stav||{}).sestaveno===LIVE.sestaveno)return;
       // kandidátky a kandidáti 2026 jsou v každém sestavení stejní; kdyby nebyli, platí stará data
       if(B.L!==D.L-P26.L0||B.N!==D.N-P26.N0)return;
-      useLive(B);render();fillRoky();
+      useLive(B);findUncounted();render();fillRoky();
       if(LIVE.secteno>=LIVE.zastup){clearInterval(liveTimer);liveTimer=0;}
     }catch(e){}
   },5*60*1000);
@@ -248,6 +248,41 @@ function findSplits(){
   byCY.forEach((st,k)=>{if(st.size>1)splitCY.add(k);});
 }
 const isSplit=l=>splitCY.has(D.mcode[D.mi[l]]+"_"+D.yr[l]);
+// Kandidát s nulou na místě, kam padá hlas každého, kdo zakřížkoval celou kandidátku (prvních
+// tolik míst, kolik má zastupitelstvo členů): hlasy pro něj se zřejmě nezapočítávaly, typicky
+// proto, že krátce před volbami zemřel (Klučov 2026). ČSÚ ho vede jako platného kandidáta
+// a počítá ho do průměru, takže hranice i zvolení zůstávají, jak jsou. Pozná se tak, že
+// ostatní z těch míst mají aspoň 10 hlasů (2006–2026 je takových 27, z toho 4 zvolení).
+// Do příkladů nejde a nikdo ho „nepředběhl“ (bit bBe se pro jeho kandidátku přepočítá).
+let NEZAP=new Set(),NZL=null;
+function findUncounted(){
+  const {L,n,off,votes,mand,pv,bEl,bBe}=D;
+  NEZAP=new Set();NZL=new Uint8Array(L);
+  for(let l=0;l<L;l++){
+    const ln=n[l];if(ln<2||!pv[l])continue;
+    const o=off[l],top=Math.min(ln,mand[l]);
+    let z=-1,zeros=0,mo=Infinity;
+    for(let i=0;i<top;i++)if(!votes[o+i]){z=o+i;zeros++;}
+    if(zeros!==1)continue;
+    for(let i=0;i<top;i++)if(o+i!==z)mo=Math.min(mo,votes[o+i]);
+    if(mo<10)continue;
+    NEZAP.add(z);NZL[l]=1;
+    let minEl=Infinity;
+    for(let i=0;i<ln;i++){const ix=o+i;if(ix!==z&&bit(bEl,ix))minEl=Math.min(minEl,votes[ix]);}
+    for(let i=0;i<ln;i++){const ix=o+i;
+      if(!bit(bEl,ix)&&votes[ix]>minEl)bBe[ix>>3]|=1<<(ix&7);else bBe[ix>>3]&=~(1<<(ix&7));}
+  }
+}
+const uncounted=ix=>NEZAP.has(ix);
+// věta pod tabulkou kandidátky, která takového kandidáta má
+function uncountedNote(l){
+  if(!NZL||!NZL[l])return "";
+  const o=D.off[l],top=Math.min(D.n[l],D.mand[l]);
+  let z=-1;for(let i=0;i<top;i++)if(uncounted(o+i))z=o+i;
+  return ` Kandidát na ${D.pos[z]}. místě má 0 hlasů, ačkoli stojí mezi prvními ${top} místy, na která `
+    +`připadá hlas každého, kdo zakřížkoval celou kandidátku. Hlasy pro něj se tedy zřejmě nezapočítávaly, `
+    +`například proto, že krátce před volbami zemřel.`;
+}
 const avgOf=l=>D.pv[l]/Math.max(1,D.n[l]);
 const thrOf=l=>{const a=Math.floor(avgOf(l));return a+a/10;};
 
@@ -356,6 +391,7 @@ function scan(){
     let wEl=-1,bNe=-1;
     for(let i=0;i<ln;i++){
       const ix=o+i;
+      if(NZL[l]&&uncounted(ix))continue;    // nula z nezapočítaných hlasů není paradox
       if(bit(bEl,ix)){if(wEl<0||votes[ix]<votes[wEl])wEl=ix;}
       else {if(bNe<0||votes[ix]>votes[bNe])bNe=ix;}
     }
@@ -378,7 +414,9 @@ function listTable(l,marks){
     const ix=o+i,e=bit(bEl,ix),c=bit(bCl,ix);
     const cls=(marks&&marks.has(ix))?"mark":(e?"in":"");
     const nm=NAMES?`<small>${NAMES.of(ix)||"–"}</small>`:"";
-    rows+=`<tr class="${cls}"><td>${pos[ix]}.${nm}</td><td>${fmt.format(votes[ix])}</td>`
+    const vt=uncounted(ix)?`<span class="term" data-tip="Hlasy pro tohoto kandidáta se zřejmě nezapočítávaly, viz text pod tabulkou.">0</span>`
+      :fmt.format(votes[ix]);
+    rows+=`<tr class="${cls}"><td>${pos[ix]}.${nm}</td><td>${vt}</td>`
       +`<td>${Math.round(100*votes[ix]/Math.max(av,1e-9))} %</td>`
       +`<td class="${c?"yes":"no"}">${c?"ano":"ne"}</td>`
       +(live?`<td class="no">–</td></tr>`:`<td class="${e?"yes":"no"}">${e?"ano":"ne"}</td></tr>`);
@@ -412,18 +450,20 @@ function liveStory(l){
   const thrTxt=`${thr.toLocaleString("cs-CZ",{maximumFractionDigits:1})} ${Number.isInteger(thr)?hl(thr):"hlasu"}`;
   return (cl===0?`Podle dosud sečtených hlasů zatím hranici ${thrTxt} nepřekročil nikdo.`
       :`Podle dosud sečtených hlasů zatím hranici ${thrTxt} ${prek(cl)} ${cl} ${kand(cl)}.`)
-    +` Kolik mandátů kandidátka získá a komu připadnou, bude jasné, až budou sečtené všechny okrsky.`;
+    +` Kolik mandátů kandidátka získá a komu připadnou, bude jasné, až budou sečtené všechny okrsky.`
+    +uncountedNote(l);
 }
 function listStory(l){
   const {off,n,votes,seats,bEl,bOr,bCl}=D;
   const ln=n[l],o=off[l],M=seats[l],thr=thrOf(l);
   if(M===0) return "Kandidátka nezískala žádný mandát, takže se pořadí na ní vůbec nestanovovalo. "
-    +"Sloupec „nad hranicí“ je tu jen pro srovnání – na nic neměl vliv.";
+    +"Sloupec „nad hranicí“ je tu jen pro srovnání – na nic neměl vliv."+uncountedNote(l);
   let cl=0,clUnder=0,moved=0,wEl=-1,bNe=-1;
   for(let i=0;i<ln;i++){
     const ix=o+i;
     if(bit(bCl,ix)){cl++;if(!bit(bOr,ix))clUnder++;}
     if(bit(bEl,ix)&&!bit(bOr,ix))moved++;
+    if(uncounted(ix))continue;
     if(bit(bEl,ix)){if(wEl<0||votes[ix]<votes[wEl])wEl=ix;}
     else if(bNe<0||votes[ix]>votes[bNe])bNe=ix;
   }
@@ -448,7 +488,7 @@ function listStory(l){
   if(wEl>=0&&bNe>=0&&votes[bNe]>votes[wEl]){
     s+=` Nejslabší zvolený má ${fmt.format(votes[wEl])} ${hl(votes[wEl])}, nejsilnější nezvolený ${fmt.format(votes[bNe])}, tedy o ${fmt.format(votes[bNe]-votes[wEl])} víc.`;
   }
-  return s;
+  return s+uncountedNote(l);
 }
 // 1 -> one, 2-4 -> few, else many (22 reads "dvacet dva hlasů", so no modulo)
 const pl=(n,one,few,many)=>n===1?one:(n>=2&&n<=4?few:many);
@@ -1065,7 +1105,7 @@ function boot(){
     D0=D=parse(a);META=D.meta;
     // bez dat 2026 (chybí, nebo nesedí) nástroj běží dál nad lety 2006–2022
     if(b)try{useLive(parse(b));}catch(e){D=D0;}
-    findSplits();countRivals();boot();
+    findSplits();countRivals();findUncounted();boot();
   }catch(e){$("boot").innerHTML='<div class="empty">Data se nepodařilo načíst ('+esc(e&&e.message||e)
     +'). Stránka potřebuje Chrome, Edge, Firefox&nbsp;113+ nebo Safari&nbsp;16.4+.</div>';}
 })();
