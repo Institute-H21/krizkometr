@@ -5,12 +5,18 @@
 // ------------------------------------------------------------- nastavení
 // VERZE: po každé výměně souborů v data/ ji změňte (a totéž číslo v odkazech
 // na skript a styly v HTML), jinak můžou prohlížeče chvíli držet stará data
-const VERZE="2026-10-07";
+const VERZE="2026-10-10";
 const ASSETS=new URL(".",(document.currentScript&&document.currentScript.src)||location.href);
 const DATA_URL=new URL("../data/",ASSETS);
 const SOUBORY={vysledky:"vysledky.bin",jmena:"jmena.bin",kandidatky:"kandidatky.bin"};
+// volby 2026 leží ve vlastních souborech (nastroje/prubezne2026.cs): během sčítání se
+// přepisuje jen vysledky-2026.bin, kandidátky a jména 2026 i data 2006–2022 zůstávají
+const SOUBORY26={vysledky:"vysledky-2026.bin",jmena:"jmena-2026.bin",kandidatky:"kandidatky-2026.bin"};
 const VIEW=document.body.dataset.view||"vse";   // vse | pruzkumnik | grafy | kandidatka
 let META=null,D=null,anecOpen=false,searchRefresh=null,anecMode="weak",anecIdx=0,booted=false;
+// D0 = data 2006–2022; P26 = kde v D začíná rok 2026; LIVE = průběh sčítání;
+// ST = stav sčítání kandidátky: 0 sečteno (i všechny starší volby), 1 průběžně, 2 nic
+let D0=null,P26=null,LIVE=null,ST=null;
 // jména leží ve zvláštním souboru; stáhnou se teprve, když si je někdo vyžádá
 let NAMES=null,namesPromise=null,namesFailed=false,onNames=null;
 // plné názvy kandidátek z registru ČSÚ a krátké štítky do tlačítek
@@ -26,9 +32,10 @@ const $=id=>document.getElementById(id);
 
 async function gunzip(by){const st=new Blob([by]).stream().pipeThrough(new DecompressionStream("gzip"));
   return new Uint8Array(await new Response(st).arrayBuffer());}
-// GitHub Pages posílá .bin tak, jak leží; soubory jsou zabalené gzipem
-async function fetchBytes(name){
-  const r=await fetch(new URL(name+"?v="+VERZE,DATA_URL));
+// GitHub Pages posílá .bin tak, jak leží; soubory jsou zabalené gzipem.
+// Průběžná data (fresh) si prohlížeč pokaždé ověří u serveru, nebere je z mezipaměti.
+async function fetchBytes(name,fresh){
+  const r=await fetch(new URL(name+"?v="+VERZE,DATA_URL),fresh?{cache:"no-cache"}:undefined);
   if(!r.ok)throw new Error(name+": "+r.status);
   const b=new Uint8Array(await r.arrayBuffer());
   return (b[0]===0x1f&&b[1]===0x8b)?gunzip(b):b;
@@ -36,7 +43,7 @@ async function fetchBytes(name){
 function parse(raw){
   let dv=new DataView(raw.buffer,raw.byteOffset,raw.byteLength);
   const ml=dv.getUint32(0,true);
-  META=JSON.parse(new TextDecoder().decode(new Uint8Array(raw.buffer,raw.byteOffset+4,ml)));
+  const meta=JSON.parse(new TextDecoder().decode(new Uint8Array(raw.buffer,raw.byteOffset+4,ml)));
   const buf=raw.subarray(4+ml);
   dv=new DataView(buf.buffer,buf.byteOffset,buf.byteLength);
   const L=dv.getUint32(0,true),N=dv.getUint32(4,true);let o=8;
@@ -61,9 +68,84 @@ function parse(raw){
   const M=dv.getUint32(o,true);o+=4;
   const mcode=cp(M,Uint32Array,4),mward=u8(M),mokr=u8(M),mtyp=u8(M);
   return {L,N,yr,mand,seats,n,mi,pop,mask,pv,off,pos,votes,bEl,bOr,bCl,bBe,bHi,
-          names,abbr,mcode,mward,mokr,mtyp};
+          names,abbr,mcode,mward,mokr,mtyp,meta};
 }
 const bit=(a,i)=>(a[i>>3]>>(i&7))&1;
+
+// připojí za data 2006–2022 rok z dalšího souboru (volby 2026). Kandidátky, kandidáti
+// a obce 2026 jdou za ty starší, takže indexy dřívějších let zůstávají, jak byly.
+// Štítky stran a okresy se párují podle názvu, kdyby se jejich pořadí v souborech lišilo.
+function append(A,B){
+  const mA=A.meta,mB=B.meta,L0=A.L,N0=A.N,M0=A.mcode.length,N=N0+B.N;
+  const years=mA.years.slice();
+  const yMap=mB.years.map(y=>{const i=years.indexOf(y);return i<0?years.push(y)-1:i;});
+  const tMap=mB.tags.map(t=>mA.tags.indexOf(t));
+  const oMap=mB.okresy.map(o=>mA.okresy.findIndex(x=>x[0]===o[0]));
+  if(oMap.some(i=>i<0))throw new Error("okresy 2026");
+  const cat=(x,y)=>{const r=new x.constructor(x.length+y.length);r.set(x);r.set(y,x.length);return r;};
+  // bity kandidátů jsou po osmi v bajtu a základ nekončí na celém bajtu, proto po jednom
+  const bits=(x,y)=>{const r=new Uint8Array((N+7)>>3);r.set(x);
+    for(let i=0;i<B.N;i++)if((y[i>>3]>>(i&7))&1){const j=N0+i;r[j>>3]|=1<<(j&7);}
+    return r;};
+  const mask=B.mask.map(m=>{let r=0;tMap.forEach((t,b)=>{if(t>=0&&(m>>>b)&1)r|=1<<t;});return r>>>0;});
+  const R={L:L0+B.L,N,yr:cat(A.yr,B.yr.map(i=>yMap[i])),mand:cat(A.mand,B.mand),seats:cat(A.seats,B.seats),
+    n:cat(A.n,B.n),mi:cat(A.mi,B.mi.map(i=>i+M0)),pop:cat(A.pop,B.pop),mask:cat(A.mask,mask),pv:cat(A.pv,B.pv),
+    pos:cat(A.pos,B.pos),votes:cat(A.votes,B.votes),
+    bEl:bits(A.bEl,B.bEl),bOr:bits(A.bOr,B.bOr),bCl:bits(A.bCl,B.bCl),bBe:bits(A.bBe,B.bBe),bHi:bits(A.bHi,B.bHi),
+    names:A.names.concat(B.names),abbr:A.abbr.concat(B.abbr),mcode:cat(A.mcode,B.mcode),mward:cat(A.mward,B.mward),
+    mokr:cat(A.mokr,B.mokr.map(o=>oMap[o])),mtyp:cat(A.mtyp,B.mtyp),meta:mA};
+  R.off=new Uint32Array(R.L);for(let i=0,a=0;i<R.L;i++){R.off[i]=a;a+=R.n[i];}
+  // stav sčítání: v souboru jsou jen obce, kde ještě nejsou rozdělené mandáty
+  const st=mB.stav||{},stM=new Uint8Array(B.mcode.length),okr=new Map();
+  (st.obce||[]).forEach(([m,z,c])=>{stM[m]=z>0?1:2;okr.set(m+M0,[z,c]);});
+  const S_=new Uint8Array(R.L);for(let l=L0;l<R.L;l++)S_[l]=stM[R.mi[l]-M0];
+  // zastupitelstva se počítají jako v souhrnu nahoře, tedy volební obvod zvlášť
+  const has=new Uint8Array(B.mcode.length);B.mi.forEach(m=>has[m]=1);
+  let zastup=0,secteno=0;has.forEach((h,m)=>{if(h){zastup++;if(!stM[m])secteno++;}});
+  return {D:R,years,P:{L0,N0},ST:S_,LIVE:{yi:yMap[0],cas:st.cas||"",sestaveno:st.sestaveno||"",
+    zastup,secteno,okr,nekonaji:new Set(st.nekonaji||[])}};
+}
+function useLive(B){
+  const x=append(D0,B);
+  D=x.D;META.years=x.years;P26=x.P;ST=x.ST;LIVE=x.LIVE;
+}
+function fillRoky(){
+  document.querySelectorAll(".roky").forEach(el=>el.textContent=rokyTxt()
+    +(LIVE&&LIVE.secteno<LIVE.zastup?` (${META.years[LIVE.yi]} průběžně)`:""));
+}
+// ještě se sčítá a výběr volby 2026 obsahuje
+const liveOn=()=>!!LIVE&&LIVE.secteno<LIVE.zastup&&(S.years.size===0||S.years.has(LIVE.yi));
+// čas ČSÚ "2026-10-10T21:24:01" -> "10. 10. 21:24"
+const casTxt=()=>{const m=/^\d{4}-(\d\d)-(\d\d)T(\d\d):(\d\d)/.exec(LIVE.cas);
+  return m?`${+m[2]}. ${+m[1]}. ${m[3]}:${m[4]}`:"";};
+// „z“, nebo „ze“ před číslem n podle toho, jak se čte: ze 2, ze 174, z 5, z 1 010
+const ze=n=>{const s=String(n);
+  if(n>=10&&n<20)return [12,13,14,16,17].includes(n)?"ze":"z";
+  if(s[0]==="1")return s.length===3?"ze":"z";
+  return "23467".includes(s[0])?"ze":"z";};
+function liveNote(){
+  if(!liveOn())return "";
+  return `<span class="live">Volby ${META.years[LIVE.yi]} se ještě sčítají. Započítaná jsou jen zastupitelstva, `
+    +`kde už ČSÚ rozdělil mandáty: ${fmt.format(LIVE.secteno)} ${ze(LIVE.zastup)} ${fmt.format(LIVE.zastup)} `
+    +`(stav ${casTxt()}).</span>`;
+}
+// průběžná data se během sčítání v otevřené stránce sama obnovují
+let liveTimer=0;
+function watchLive(){
+  if(liveTimer||!LIVE||LIVE.secteno>=LIVE.zastup)return;
+  liveTimer=setInterval(async()=>{
+    if(document.visibilityState!=="visible")return;
+    try{
+      const B=parse(await fetchBytes(SOUBORY26.vysledky,true));
+      // soubor se přepisuje, jen když přibyly hlasy, takže stejné sestavení = nic nového
+      if((B.meta.stav||{}).sestaveno===LIVE.sestaveno)return;
+      // kandidátky a kandidáti 2026 jsou v každém sestavení stejní; kdyby nebyli, platí stará data
+      if(B.L!==D.L-P26.L0||B.N!==D.N-P26.N0)return;
+      useLive(B);render();fillRoky();
+      if(LIVE.secteno>=LIVE.zastup){clearInterval(liveTimer);liveTimer=0;}
+    }catch(e){}
+  },5*60*1000);
+}
 
 // soubor se jmény se stahuje vždy, ale až potom, co je stránka vykreslená,
 // takže se na něj nikdo nečeká; na úsporném připojení se vynechá
@@ -79,29 +161,48 @@ function ensureNames(){
   namesPromise=loadNames().then(()=>{render();if(searchRefresh)searchRefresh();if(onNames)onNames();});
   return namesPromise;
 }
+function readNames(raw){
+  const dv=new DataView(raw.buffer,raw.byteOffset,raw.byteLength);
+  const n=dv.getUint32(0,true),ls=dv.getUint32(8,true),lg=dv.getUint32(12,true);
+  let o=16;
+  const td=new TextDecoder();
+  const sur=td.decode(new Uint8Array(raw.buffer,raw.byteOffset+o,ls)).split("\n");o+=ls;
+  const giv=td.decode(new Uint8Array(raw.buffer,raw.byteOffset+o,lg)).split("\n");o+=lg;
+  const pl=k=>{const a=new Uint32Array(k),b0=o,b1=o+k,b2=o+2*k,b3=o+3*k;
+    for(let i=0;i<k;i++)a[i]=raw[b0+i]|(raw[b1+i]<<8)|(raw[b2+i]<<16)|(raw[b3+i]*16777216);
+    o+=4*k;return a;};
+  return {n,sur,giv,si:pl(n),gi:pl(n)};
+}
 async function loadNames(){
   try{
-    const raw=await fetchBytes(SOUBORY.jmena);
-    const dv=new DataView(raw.buffer,raw.byteOffset,raw.byteLength);
-    const n=dv.getUint32(0,true),ls=dv.getUint32(8,true),lg=dv.getUint32(12,true);
-    let o=16;
-    const td=new TextDecoder();
-    const sur=td.decode(new Uint8Array(raw.buffer,raw.byteOffset+o,ls)).split("\n");o+=ls;
-    const giv=td.decode(new Uint8Array(raw.buffer,raw.byteOffset+o,lg)).split("\n");o+=lg;
-    const pl=k=>{const a=new Uint32Array(k),b0=o,b1=o+k,b2=o+2*k,b3=o+3*k;
-      for(let i=0;i<k;i++)a[i]=raw[b0+i]|(raw[b1+i]<<8)|(raw[b2+i]<<16)|(raw[b3+i]*16777216);
-      o+=4*k;return a;};
-    const si=pl(n),gi=pl(n);
+    const [raw,raw26]=await Promise.all([fetchBytes(SOUBORY.jmena),
+      P26?fetchBytes(SOUBORY26.jmena).catch(()=>null):null]);
+    let {sur,giv,si,gi}=readNames(raw);
+    // jména 2026 se připojí, jen když jich je stejně jako kandidátů 2026 ve výsledcích;
+    // jinak zůstanou kandidáti 2026 bez jmen, ale nikdy s cizími
+    const b=raw26&&readNames(raw26);
+    if(b&&b.n===D.N-P26.N0){
+      const s2=new Uint32Array(D.N),g2=new Uint32Array(D.N);
+      s2.set(si);g2.set(gi);
+      for(let i=0;i<b.n;i++){s2[P26.N0+i]=b.si[i]+sur.length;g2[P26.N0+i]=b.gi[i]+giv.length;}
+      sur=sur.concat(b.sur);giv=giv.concat(b.giv);si=s2;gi=g2;
+    }
     // příjmení a křestní jména leží v tabulkách bez opakování; přes ně se i hledá
     NAMES={of:ix=>((sur[si[ix]]||"")+" "+(giv[gi[ix]]||"")).trim(),sur,giv,si,gi};
   }catch(e){ namesPromise=null; namesFailed=true; }
 }
 function ensureLists(){
   if(LISTS||listsPromise) return listsPromise;
-  listsPromise=fetchBytes(SOUBORY.kandidatky).then(raw=>{
-    const j=JSON.parse(new TextDecoder().decode(raw));
-    LISTS={full:l=>j.f[j.fi[l]]||"",
-           lab:l=>{const s=j.si[l];return s===-1?"":s===-2?j.f[j.fi[l]]:j.s[s];}};
+  const rd=raw=>JSON.parse(new TextDecoder().decode(raw));
+  listsPromise=Promise.all([fetchBytes(SOUBORY.kandidatky).then(rd),
+      P26?fetchBytes(SOUBORY26.kandidatky).then(rd).catch(()=>null):null]).then(([j,k])=>{
+    // kandidátka l z roku 2026 je v souboru 2026 na místě l-L0
+    const L0=P26?P26.L0:Infinity;
+    if(k&&k.fi.length!==D.L-L0)k=null;
+    const at=l=>l<L0?[j,l]:k?[k,l-L0]:null;
+    LISTS={full:l=>{const p=at(l);return p?p[0].f[p[0].fi[p[1]]]||"":"";},
+           lab:l=>{const p=at(l);if(!p)return "";const [x,i]=p,s=x.si[i];
+             return s===-1?"":s===-2?x.f[x.fi[i]]:x.s[s];}};
     render();
   }).catch(()=>{listsPromise=null;});
   return listsPromise;
@@ -209,6 +310,7 @@ function scan(){
   const B={m:new Float64Array(NB),d:new Float64Array(NB)};
   const EX=[];                              // všechny paradoxy ve výběru
   for(let l=0;l<L;l++){
+    if(ST&&ST[l])continue;               // 2026: jen zastupitelstva s rozdělenými mandáty
     if(tm&&!(tm&mask[l]))continue;
     const ln=n[l];if(!ln)continue;
     if(!anyY&&!S.years.has(D.yr[l]))continue;
@@ -270,6 +372,7 @@ function listTable(l,marks){
   if(!LISTS)ensureLists();
   const {off,n,pos,votes,seats,bEl,bCl,mi,names,pop,mand}=D;
   const ln=n[l],av=avgOf(l),thr=thrOf(l),o=off[l];
+  const live=!!ST&&ST[l]===1;           // průběžně sečtená: mandáty ještě nejsou rozdělené
   let rows="";
   for(let i=0;i<ln;i++){
     const ix=o+i,e=bit(bEl,ix),c=bit(bCl,ix);
@@ -278,21 +381,38 @@ function listTable(l,marks){
     rows+=`<tr class="${cls}"><td>${pos[ix]}.${nm}</td><td>${fmt.format(votes[ix])}</td>`
       +`<td>${Math.round(100*votes[ix]/Math.max(av,1e-9))} %</td>`
       +`<td class="${c?"yes":"no"}">${c?"ano":"ne"}</td>`
-      +`<td class="${e?"yes":"no"}">${e?"ano":"ne"}</td></tr>`;
+      +(live?`<td class="no">–</td></tr>`:`<td class="${e?"yes":"no"}">${e?"ano":"ne"}</td></tr>`);
   }
-  return `<p class="lmeta"><b>${names[mi[l]]}</b>${okrSuf(mi[l])} · volby ${META.years[D.yr[l]]} · `
+  return (live?liveBox(l):"")
+    +`<p class="lmeta"><b>${names[mi[l]]}</b>${okrSuf(mi[l])} · volby ${META.years[D.yr[l]]} · `
     +`${fmt.format(pop[l])} obyvatel · `
     +(isSplit(l)?`volební obvod ${D.mward[mi[l]]}, ${mand[l]} ${md(mand[l])} · `
                 :`zastupitelstvo o ${mand[l]} členech · `)
     +`kandidátka ${listName(l)}</p>`
     +`<p class="lmeta">${fmt.format(D.pv[l])} ${hl(D.pv[l])} na ${ln} ${pl(ln,"kandidáta","kandidáty","kandidátů")} · průměr `
     +`${av.toLocaleString("cs-CZ",{maximumFractionDigits:2})}, hranice `
-    +`${thr.toLocaleString("cs-CZ",{maximumFractionDigits:1})} ${Number.isInteger(thr)?hl(thr):"hlasu"} · získala ${seats[l]} ${md(seats[l])}</p>`
+    +`${thr.toLocaleString("cs-CZ",{maximumFractionDigits:1})} ${Number.isInteger(thr)?hl(thr):"hlasu"} · `
+    +(live?`mandáty zatím nerozdělené</p>`:`získala ${seats[l]} ${md(seats[l])}</p>`)
     +`<table class="lt"><thead><tr><th>Místo</th><th>Hlasů</th>`
     +`<th><span class="term" data-tip="Hlasy kandidáta v poměru k průměru na jednoho kandidáta téže kandidátky.">% průměru</span></th>`
     +`<th><span class="term" data-tip="Dosáhl na hranici pro přeskočení, tedy na celou část průměru zvýšenou o desetinu. Není to přesně 110 % ze sloupce vlevo, proto hranici překročí i kandidát se 105 %.">Nad hranicí</span></th>`
     +`<th>Zvolen</th></tr></thead><tbody>${rows}</tbody></table>`
-    +`<div class="story">${listStory(l)}</div>`;
+    +`<div class="story">${live?liveStory(l):listStory(l)}</div>`;
+}
+// kandidátka z obce, kde se ještě sčítá: hlasy jsou jen z dosud sečtených okrsků
+function liveBox(l){
+  const [z,c]=LIVE.okr.get(D.mi[l])||[0,0];
+  return `<p class="livebox"><b>Průběžný výsledek.</b> Sečteno ${fmt.format(z)} ${ze(c)} ${fmt.format(c)} `
+    +`${pl(c,"okrsku","okrsků","okrsků")} (stav ${casTxt()}). Mandáty se rozdělí, až budou sečtené všechny `
+    +`okrsky; do té doby se počty hlasů i hranice ještě mění.</p>`;
+}
+function liveStory(l){
+  const ln=D.n[l],o=D.off[l],thr=thrOf(l);
+  let cl=0;for(let i=0;i<ln;i++)if(bit(D.bCl,o+i))cl++;
+  const thrTxt=`${thr.toLocaleString("cs-CZ",{maximumFractionDigits:1})} ${Number.isInteger(thr)?hl(thr):"hlasu"}`;
+  return (cl===0?`Podle dosud sečtených hlasů zatím hranici ${thrTxt} nepřekročil nikdo.`
+      :`Podle dosud sečtených hlasů zatím hranici ${thrTxt} ${prek(cl)} ${cl} ${kand(cl)}.`)
+    +` Kolik mandátů kandidátka získá a komu připadnou, bude jasné, až budou sečtené všechny okrsky.`;
 }
 function listStory(l){
   const {off,n,votes,seats,bEl,bOr,bCl}=D;
@@ -357,7 +477,7 @@ function cutText(R){
 function hero(R){
   const rest=R.el-R.jump-R.idle;
   const sh=v=>R.el?pc(100*v/R.el)+" %":"–";
-  return `<p class="cutline">${cutText(R)}</p><div class="hero">${dotPlot(R)}<div class="tally">`
+  return `<p class="cutline">${cutText(R)}${liveNote()}</p><div class="hero">${dotPlot(R)}<div class="tally">`
     +`<div class="big3">`
     +`<div><span class="n">${fmt.format(R.cand)}</span><span class="l">kandidatur</span></div>`
     +`<div><span class="n">${fmt.format(R.el)}</span><span class="l">z nich získalo mandát</span></div>`
@@ -532,10 +652,11 @@ function render(){
   if(!head&&!fun&&!band){if(searchRefresh)searchRefresh();postHeight();return;}
   const {R,B,EX}=scan();
   const cutEl=$("cut");
-  if(cutEl)cutEl.innerHTML=(linked?"Výběr z průzkumníku výše: ":"")+cutText(R);
+  if(cutEl)cutEl.innerHTML=(linked?"Výběr z průzkumníku výše: ":"")+cutText(R)+liveNote();
   broadcast();
   if(!R.cand){
-    const msg='<div class="empty">Ve vybraném výběru nezůstal nikdo. Uvolněte některý filtr.</div>';
+    const msg='<div class="empty">Ve vybraném výběru nezůstal nikdo. Uvolněte některý filtr.'
+      +(liveOn()?` ${liveNote()}`:"")+'</div>';
     if(head)head.innerHTML=msg;
     if(fun){fun.innerHTML=msg;$("stack").innerHTML="";$("skey").innerHTML="";}
     if(band)bandChart(B);
@@ -581,7 +702,10 @@ function setupSearch(){
   const byMuni=new Map();
   for(let l=0;l<D.L;l++){const c=D.mcode[D.mi[l]];
     if(!byMuni.has(c))byMuni.set(c,[]);byMuni.get(c).push(l);}
-  const nameOf=c=>D.names[D.mi[byMuni.get(c)[0]]];
+  // název a okres podle posledních voleb: obce se přejmenovávají a přecházejí mezi okresy
+  // (Kyšice byly do roku 2018 v okrese Plzeň-sever, v roce 2026 jsou v Plzni-městě)
+  const lastOf=c=>{const a=byMuni.get(c);return a[a.length-1];};
+  const nameOf=c=>D.names[D.mi[lastOf(c)]];
   const norm=s=>s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
   // "Praha hl.m." je v datech ČSÚ celé město; bez téhle úpravy se na dotaz
   // "praha" neukáže, protože abecedně leží až za Prahou 21
@@ -599,6 +723,9 @@ function setupSearch(){
     const f=LISTS?LISTS.full(l):"",same=!f||f.toLowerCase()===(D.abbr[l]||"").toLowerCase();
     return `<button type="button" class="chip" data-l="${l}" aria-pressed="false"${same?"":` data-tip="${esc(f)}"`}>`
       +`${listChip(l,i)}</button>`;};
+  // obec, kde se v roce 2026 nevolí: kandidátů bylo méně, než má zastupitelstvo členů
+  const nekona=m=>!!LIVE&&LIVE.nekonaji.has(m)&&(S.years.size===0||S.years.has(LIVE.yi));
+  const pending=l=>!!ST&&ST[l]===2;      // z obce ještě není sečtený ani jeden okrsek
   function show(m,keep){
     curMuni=m;
     // jedna obec má kandidátky z několika voleb; bez rozdělení po letech
@@ -606,22 +733,29 @@ function setupSearch(){
     const anyY=S.years.size===0;
     const ls=byMuni.get(m).filter(l=>anyY||S.years.has(D.yr[l]));
     if(!ls.length){
-      detail.innerHTML=`<p class="sub" style="margin:14px 0 0">${nameOf(m)} – ve `
-        +`vybraných volbách tu žádná kandidátka nekandidovala.</p>`;
+      detail.innerHTML=`<p class="sub" style="margin:14px 0 0">${nameOf(m)} – `
+        +(nekona(m)?`volby ${META.years[LIVE.yi]} se tu kvůli nedostatku kandidátů nekonají.`
+          :`ve vybraných volbách tu žádná kandidátka nekandidovala.`)+`</p>`;
       curList=null;postHeight();return;
     }
     const byYear=new Map();
     ls.forEach(l=>{const y=D.yr[l];if(!byYear.has(y))byYear.set(y,[]);byYear.get(y).push(l);});
     const years=[...byYear.keys()].sort((a,b)=>a-b);
     years.forEach(y=>byYear.get(y).sort((a,b)=>D.pv[b]-D.pv[a]));
-    if(!keep||!ls.includes(curList))curList=byYear.get(years[years.length-1])[0];
+    // na začátku největší kandidátka z posledních voleb, které už nějaké výsledky mají
+    if(!keep||!ls.includes(curList)){
+      const ys=years.filter(y=>byYear.get(y).some(l=>!pending(l)));
+      curList=ys.length?byYear.get(ys[ys.length-1]).find(l=>!pending(l)):null;
+    }
     detail.innerHTML=`<p class="sub" style="margin:14px 0 8px"><b>${nameOf(m)}</b>`
-      +`${okrSuf(D.mi[byMuni.get(m)[0]])} – `
+      +`${okrSuf(D.mi[lastOf(m)])} – `
       +`${fmt.format(ls.length)} ${kl(ls.length)} · `
       +(years.length===1?`volby ${META.years[years[0]]}`
         :`volby ${META.years[years[0]]}–${META.years[years[years.length-1]]}`)+`</p>`
       +`<div id="lchips">`+years.map(y=>{
         const lw=byYear.get(y),wards=[...new Set(lw.map(l=>D.mward[D.mi[l]]))].sort((a,b)=>a-b);
+        if(lw.every(pending))return `<div class="yrow"><span class="yr">${META.years[y]}</span>`
+          +`<span class="ych nr">výsledky ještě nejsou sečtené</span></div>`;
         const body=(wards.length>1||isSplit(lw[0]))
           ? wards.map(w=>`<span class="wd">obvod ${w}</span>`
               +lw.filter(l=>D.mward[D.mi[l]]===w).map((l,i)=>chipFor(l,i)).join(" ")).join(" ")
@@ -632,9 +766,19 @@ function setupSearch(){
       [...$("lchips").querySelectorAll("button[data-l]")].forEach(x=>
         x.setAttribute("aria-pressed",+x.dataset.l===l));
       // kandidát nalezený podle jména je v tabulce zvýrazněný
-      $("lbody").innerHTML=listTable(l,found&&found.l===l?new Set([found.ix]):null);postHeight();};
+      $("lbody").innerHTML=l===null?""
+        :pending(l)?pendingBox(l)
+        :listTable(l,found&&found.l===l?new Set([found.ix]):null);
+      postHeight();};
     $("lchips").onclick=e=>{const b=e.target.closest("button[data-l]");if(!b)return;draw(+b.dataset.l);};
     draw(curList);
+  }
+  // ze zastupitelstva ještě nic nepřišlo; kdo hledal kandidáta, aspoň vidí, kde kandiduje
+  function pendingBox(l){
+    const who=found&&found.l===l&&NAMES?`${esc(NAMES.of(found.ix))} kandiduje na ${D.pos[found.ix]}. místě `
+      +`kandidátky ${listInline(l)}. `:"";
+    return `<p class="livebox"><b>Ještě nesečteno.</b> ${who}ČSÚ tu zatím nemá sečtený ani jeden `
+      +`okrsek. Zkuste to později.</p>`;
   }
   searchRefresh=()=>{if(curMuni!==null)show(curMuni,true);};
 
@@ -669,12 +813,21 @@ function setupSearch(){
     }
     return {top,count};
   }
+  // jak je obec v roce 2026 sečtená; jen když jsou volby 2026 ve výběru
+  const stTxt=m=>{
+    if(!LIVE||!(S.years.size===0||S.years.has(LIVE.yi)))return "";
+    if(LIVE.nekonaji.has(m))return " · volby se nekonají";
+    let lo=3,hi=-1;
+    for(const l of byMuni.get(m))if(D.yr[l]===LIVE.yi){lo=Math.min(lo,ST[l]);hi=Math.max(hi,ST[l]);}
+    return hi<0?"":lo===2?" · zatím nesečteno":hi>0?" · průběžně":"";};
   const muniHit=o=>`<li><button type="button" data-m="${o.m}">${esc(o.name)}`
-    +`<span>${okrOf(D.mi[byMuni.get(o.m)[0]])||"–"} · ${o.mand} zastupitelů</span></button></li>`;
-  const candHit=({ix,l})=>{const ok=okrOf(D.mi[l]);
+    +`<span>${okrOf(D.mi[lastOf(o.m)])||"–"} · ${o.mand} zastupitelů${stTxt(o.m)}</span></button></li>`;
+  const candHit=({ix,l})=>{const ok=okrOf(D.mi[l]),s=ST?ST[l]:0,v=D.votes[ix];
     return `<li class="ch"><button type="button" data-c="${ix}" data-l="${l}">${esc(NAMES.of(ix))}`
       +`<span>${esc(D.names[D.mi[l]])}${ok?" ("+esc(ok)+")":""} · ${META.years[D.yr[l]]} · `
-      +`${esc(D.abbr[l]||"–")} · ${D.pos[ix]}. místo · ${bit(D.bEl,ix)?"s mandátem":"bez mandátu"}</span></button></li>`;};
+      +`${esc(D.abbr[l]||"–")} · ${D.pos[ix]}. místo · `
+      +`${s===2?"zatím nesečteno":s===1?`průběžně ${fmt.format(v)} ${hl(v)}`:bit(D.bEl,ix)?"s mandátem":"bez mandátu"}`
+      +`</span></button></li>`;};
   let waitNames=false;
   function runQuery(){
     const v=norm(q.value.trim());
@@ -780,9 +933,9 @@ function setupPresets(paintAbs,paintRel){
 
 function boot(){
   $("boot").replaceWith($("tpl").content.cloneNode(true));
-  document.querySelectorAll(".roky").forEach(el=>el.textContent=rokyTxt());
-  // výchozí výběr jsou poslední volby; čtečka kandidátek ukazuje všechny ročníky
-  if(VIEW!=="kandidatka")S.years.add(LASTY());
+  fillRoky();
+  // výchozí výběr jsou poslední volby, i ve čtečce kandidátek (ta jiný rok vybrat nedovolí)
+  S.years.add(LASTY());
   if($("filters")){
   const toggle=(set,v)=>set.has(v)?set.delete(v):set.add(v);
   syncs.push(chips($("yearPre"),["vše"].concat(META.years.map(String)),
@@ -903,10 +1056,15 @@ function boot(){
   if("ResizeObserver" in window)new ResizeObserver(()=>requestAnimationFrame(postHeight)).observe(document.documentElement);
   if(VIEW==="grafy")siblings({krizkometr:1,typ:"dotaz"});
   if($("q")||$("head"))prefetchNames();
+  watchLive();
 }
 (async function(){
   try{
-    D=parse(await fetchBytes(SOUBORY.vysledky));
+    const [a,b]=await Promise.all([fetchBytes(SOUBORY.vysledky),
+      fetchBytes(SOUBORY26.vysledky,true).catch(()=>null)]);
+    D0=D=parse(a);META=D.meta;
+    // bez dat 2026 (chybí, nebo nesedí) nástroj běží dál nad lety 2006–2022
+    if(b)try{useLive(parse(b));}catch(e){D=D0;}
     findSplits();countRivals();boot();
   }catch(e){$("boot").innerHTML='<div class="empty">Data se nepodařilo načíst ('+esc(e&&e.message||e)
     +'). Stránka potřebuje Chrome, Edge, Firefox&nbsp;113+ nebo Safari&nbsp;16.4+.</div>';}

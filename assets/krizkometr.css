@@ -261,3 +261,11 @@ footer b{color:var(--ink-2)}
 .search.box #detail:not(:empty){padding-bottom:20px}
 @media(max-width:560px){.box-head{padding:16px 14px}.box-head h2{font-size:19px}
   .search.box .hits{margin-left:14px;margin-right:14px}.search.box #detail{padding:0 10px}}
+/* průběžné výsledky 2026: červená tečka „živě“ a upozornění u nedopočítaných obcí */
+.live{display:block;margin-top:4px;color:var(--ink-2)}
+.live::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;
+  background:var(--hot);margin-right:7px;vertical-align:1px}
+.empty .live{margin-top:8px}
+.livebox{font-size:13.5px;line-height:1.5;color:var(--ink);background:var(--hot-soft);
+  border-left:3px solid var(--hot);padding:9px 12px;margin:10px 0 10px;max-width:560px}
+.ych.nr{font-size:13px;color:var(--ink-3)}
