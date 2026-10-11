@@ -55,6 +55,21 @@
    "ramecek": "Ve volebním systému pro komunálky často o zvolení či nezvolení rozhodují náhody nebo počty hlasů pro kandidáty, u kterých by se výsledek stejně nezměnil. V teorii sociální volby to nazýváme porušením principu nezávislosti na irelevantních alternativách.",
    "pripad": {"rok": 2026, "kod": 553484, "obvod": 1, "zkratka": "SNK", "kandidatu": 7, "hlasu": 747, "oznacit": [1, 4, 6]},
    "graf": {"hranice": [{"ubrat": 41, "popisek": "hranice, kdyby starosta dostal o 41 hlasů méně"}]}
-  }
+  },
+  {
+ "titulek": "Nejvíc hlasů nestačilo",
+ "text": "Nejvíc hlasů z celé kandidátky ANO v Hradci Králové získal Jiří Mašek, v zastupitelstvu ale nezasedne. Byl jedenáctý a hnutí získalo deset mandátů. Měl o 32 hlasů víc než lídr Lukáš Fiedler a o 447 víc než nejslabší zvolený kolega. Hranici pro přeskočení přitom nepřekročil nikdo z 37 kandidátů: hlasy byly tak vyrovnané, že i Mašek měl jen o 8,7 % víc, než byl průměr. Takových, kdo měli nejvíc hlasů ze své kandidátky a přesto zůstali mimo, bylo letos 63.",
+ "ramecek": "Křížek u celé kandidátky dá hlas všem jejím kandidátům stejně. Kde ho dá většina voličů, mají kandidáti skoro stejně hlasů a překročit hranici o desetinu nad průměrem je téměř nemožné, i pro toho nejoblíbenějšího. Rozdíly mezi kandidáty dělá jen menšina voličů, kteří křížkují jednotlivě, a ve velkých městech na to obvykle nestačí.",
+ "pripad": {"rok": 2026, "kod": 569810, "obvod": 1, "zkratka": "ANO", "kandidatu": 37, "oznacit": [1, 8, 11]},
+ "graf": {}
+  },
+  {
+ "titulek": "Starosta nad hranicí, a přesto mimo",
+ "text": "Nejvíce kandidátů rozhodnou voliči místo stran tam, kde je velký rozptyl v počtu hlasů. V Táboře třeba dosavadní starosta Štěpán Pavlík vedl svou kandidátku a hranici pro přeskočení překročil. Do zastupitelstva se přesto nedostal. Hranici totiž překonalo sedm kandidátů, kandidátka ale získala jen pět mandátů a ty připadly pěti s nejvíce hlasy. Pavlík byl s 1 915 hlasy šestý, předběhli ho mimo jiné Jakub Valeš z osmého a Jakub Smrčka z dvacátého místa. Lídrů, kteří hranici překročili a přesto zůstali mimo, bylo letos 1 020.", "ramecek": "Překročit hranici ještě neznamená mandát. Skokani se seřadí podle počtu hlasů a dostanou tolik křesel, kolik jich kandidátka získala. Když hranici překročí víc kandidátů, než je mandátů, pořadí na lístku už nerozhoduje vůbec a kandidátka se chová jako otevřená: zvoleni jsou ti s nejvíce hlasy.",
+ "ramecek": "Je-li skokanů více než mandátů, seřadí se podle počtu hlasů a dostanou tolik křesel, kolik jich kandidátka získala. Pořadí na lístku pak nerozhoduje vůbec a kandidátka se chová jako otevřená: zvoleni jsou ti s nejvíce hlasy.",
+ "pripad": {"rok": 2026, "kod": 552046, "obvod": 1, "zkratka": "T2020", "kandidatu": 27, "oznacit": [1, 8, 20]},
+ "graf": {}
+}
+
  ]
 }
