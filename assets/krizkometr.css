@@ -275,14 +275,15 @@ footer b{color:var(--ink-2)}
 .strip{padding:18px 20px 20px}
 .strip h3{font-size:19px;font-weight:700;line-height:1.3;letter-spacing:-.01em;margin:0 0 3px}
 .st-where{font-size:13px;color:var(--ink-2);margin:0 0 12px}
-.st-cols{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px 28px;align-items:start}
+/* rámeček je užší písmem a širší sloupcem, aby nebyl vyšší než text (dorovnává fitAside) */
+.st-cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.8fr);gap:14px 26px;align-items:start}
 .st-cols.solo{grid-template-columns:minmax(0,1fr)}
 @media(max-width:720px){.st-cols{grid-template-columns:minmax(0,1fr)}}
 .st-text{max-width:44em}
 .st-text p{margin:0 0 10px;font-size:15.5px;line-height:1.55}
 .st-text p:last-child,.st-aside p:last-child{margin-bottom:0}
-.st-aside{background:var(--azure-soft);border-left:3px solid var(--azure);padding:12px 15px;font-size:14px;line-height:1.5}
-.st-aside p{margin:0 0 8px}
+.st-aside{background:var(--azure-soft);border-left:3px solid var(--azure);padding:10px 13px;font-size:12.5px;line-height:1.45}
+.st-aside p{margin:0 0 6px}
 .st-text a,.st-aside a,.st-fig figcaption a{color:var(--brand)}
 .st-fig{margin:20px 0 0}
 .st-fig img{display:block;max-width:100%;height:auto}
@@ -301,6 +302,20 @@ footer b{color:var(--ink-2)}
 .st-key .k-ln{width:18px;border-top:1.5px solid var(--ink)}
 .st-key .k-da{border-top-style:dashed}
 .st-key .k-bd{width:14px;height:11px;background:var(--brand-soft);opacity:.7}
+.st-key .k-sq{border-radius:2px}
+.st-key .k-ord{width:10px;height:10px;background:#B9CBF4}
+/* přehled podle velikosti obce: celý pruh = všichni zvolení, červeně přeskočením */
+.st-bars{max-width:760px}
+.sb-row{display:grid;grid-template-columns:118px minmax(0,1fr);gap:12px;align-items:center;margin:0 0 6px}
+.sb-row.tot{margin-bottom:12px}
+.sb-lab{font-size:13px;color:var(--ink-2);white-space:nowrap}
+.sb-row.tot .sb-lab{color:var(--ink);font-weight:700}
+.sb-trk{position:relative;display:flex;gap:2px;height:20px}
+.sb-row.tot .sb-trk{height:24px}
+.sb-j{display:block;background:var(--hot);border-radius:2px 0 0 2px}
+.sb-o{display:block;flex:1;background:#B9CBF4;border-radius:0 2px 2px 0}
+.sb-v{position:absolute;top:50%;transform:translateY(-50%);margin-left:8px;font-size:12.5px;font-weight:700;color:var(--ink);white-space:nowrap}
+@media(max-width:560px){.sb-row{grid-template-columns:92px minmax(0,1fr);gap:8px}.sb-lab{font-size:12px}}
 .st-more{margin-top:16px}
 #stripList{overflow-x:auto}
 .st-foot{margin-top:16px;padding-top:10px;border-top:1px solid var(--rule);text-align:right}

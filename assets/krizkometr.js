@@ -5,7 +5,7 @@
 // ------------------------------------------------------------- nastavení
 // VERZE: po každé výměně souborů v data/ ji změňte (a totéž číslo v odkazech
 // na skript a styly v HTML), jinak můžou prohlížeče chvíli držet stará data
-const VERZE="2026-10-11a";
+const VERZE="2026-10-11b";
 const ASSETS=new URL(".",(document.currentScript&&document.currentScript.src)||location.href);
 const DATA_URL=new URL("../data/",ASSETS);
 const SOUBORY={vysledky:"vysledky.bin",jmena:"jmena.bin",kandidatky:"kandidatky.bin"};
@@ -740,8 +740,10 @@ function drawStripky(){
   const img=s.obrazek&&typeof s.obrazek==="object"&&s.obrazek.soubor?s.obrazek:null;
   let h=`<h3>${esc(stripTitle(x,stripIdx))}</h3>`+(l>=0?`<p class="st-where">${stripWhere(l)}</p>`:"")
     +`<div class="st-cols${aside?"":" solo"}"><div class="st-text">${paras(s.text)}</div>${aside}</div>`;
-  if(l>=0&&s.graf)h+=`<figure class="st-fig"><div id="stripChart"></div>${stripKey(x)}`
-    +(s.graf.popisek?`<figcaption>${inl(s.graf.popisek)}</figcaption>`:"")+`</figure>`;
+  const g=s.graf&&typeof s.graf==="object"?s.graf:s.graf?{}:null;
+  const cap=g&&g.popisek?`<figcaption>${inl(g.popisek)}</figcaption>`:"";
+  if(g&&g.typ==="velikost")h+=`<figure class="st-fig">${sizeBars()}${cap}</figure>`;
+  else if(g&&l>=0)h+=`<figure class="st-fig"><div id="stripChart"></div>${stripKey(x)}${cap}</figure>`;
   if(img)h+=`<figure class="st-fig"><img src="${esc(new URL(img.soubor,DATA_URL).href)}" alt="${esc(img.popis||"")}" loading="lazy">`
     +(img.popisek?`<figcaption>${inl(img.popisek)}</figcaption>`:"")+`</figure>`;
   if(l>=0)h+=`<details class="st-more" id="stripDet"${stripOpen?" open":""}><summary>Zobrazit celou kandidátku</summary>`
@@ -749,7 +751,7 @@ function drawStripky(){
   if(n>1){const k=(stripIdx+1)%n;
     h+=`<div class="st-foot"><button type="button" class="st-next" data-s="${k}">Další střípek: ${esc(stripTitle(STRIPKY[k],k))} ›</button></div>`;}
   $("stripBody").innerHTML=h;
-  stripW=0;drawStripChart();
+  // kandidátka se napojí dřív než graf, aby ji případná chyba v grafu nevzala s sebou
   const det=$("stripDet");
   if(det){
     const fill=()=>{$("stripList").innerHTML=listTable(l,marks);};
@@ -757,17 +759,27 @@ function drawStripky(){
     det.addEventListener("toggle",()=>{stripOpen=det.open;
       if(det.open){ensureNames();if(!$("stripList").firstChild)fill();}postHeight();});
   }
+  stripW=0;drawStripChart();fitAside();
   postHeight();
 }
-// graf se kreslí na šířku, kterou má; při změně šířky okna znovu, a jednou ještě po načtení
-// písma, protože podle jeho šířky se rozmisťují popisky
-let fontWait=false;
+// graf se kreslí na šířku, kterou má, a znovu, když se šířka změní nebo se načte písmo
+// (podle jeho šířky se rozmisťují popisky); chyba v grafu nesmí shodit zbytek stránky
 function drawStripChart(){
   const el=$("stripChart");if(!el)return;
   const W=Math.floor(el.clientWidth);if(!W||W===stripW)return;
-  stripW=W;el.innerHTML=stripChart(STRIPKY[stripIdx],Math.max(260,W));
-  if(!fontWait&&document.fonts&&document.fonts.status!=="loaded"){fontWait=true;
-    document.fonts.ready.then(()=>{stripW=0;drawStripChart();});}
+  stripW=W;
+  try{el.innerHTML=stripChart(STRIPKY[stripIdx],Math.max(260,W));}
+  catch(e){el.innerHTML="";console.error("Křížkometr: graf ke střípku",e);}
+}
+// rámeček vedle textu nemá blok prodlužovat: když je vyšší než text, písmo v něm se zmenší
+// (nejvýš na 11,5 px); na úzké obrazovce je pod textem a zůstává, jak je
+function fitAside(){
+  const a=document.querySelector("#stripBody .st-aside"),t=document.querySelector("#stripBody .st-text");
+  if(!a||!t)return;
+  a.style.fontSize="";
+  if(getComputedStyle(a.parentNode).gridTemplateColumns.trim().split(/\s+/).length<2)return;
+  let f=parseFloat(getComputedStyle(a).fontSize);
+  while(a.offsetHeight>t.offsetHeight+2&&f>11.5){f-=.5;a.style.fontSize=f+"px";}
 }
 function setupStripky(){
   const box=$("stripky");if(!box)return;
@@ -776,8 +788,11 @@ function setupStripky(){
     stripIdx=i;stripOpen=false;drawStripky();
     // tlačítko je dole: nový střípek se čte od nadpisu
     if(b.classList.contains("st-next"))$("stripNav").scrollIntoView({block:"nearest",behavior:"smooth"});});
-  let rq=0;
-  addEventListener("resize",()=>{if(!rq)rq=requestAnimationFrame(()=>{rq=0;drawStripChart();});});
+  const again=()=>{stripW=0;drawStripChart();fitAside();postHeight();};
+  if("ResizeObserver" in window){let lw=0;
+    new ResizeObserver(es=>{const w=Math.round(es[0].contentRect.width);if(w===lw)return;lw=w;again();}).observe($("stripBody"));}
+  else addEventListener("resize",again);
+  if(document.fonts&&document.fonts.addEventListener)document.fonts.addEventListener("loadingdone",again);
 }
 // Graf kandidátky ke střípku: kandidáti v pořadí na lístku (vodorovně) a jejich hlasy (svisle).
 // Plný bod je zvolený, kroužek nezvolený, červeně kandidáti z textu (pripad.oznacit). Plná čára
@@ -786,8 +801,9 @@ function setupStripky(){
 // kam by mandáty připadly podle pořadí.
 let fontFam="",measure=null;
 const textW=(t,size,bold)=>{
-  if(!measure){measure=document.createElement("canvas").getContext("2d");
-    fontFam=getComputedStyle(document.body).fontFamily;}
+  if(measure===null){const c=document.createElement("canvas");
+    measure=(c.getContext&&c.getContext("2d"))||false;fontFam=getComputedStyle(document.body).fontFamily;}
+  if(!measure)return t.length*size*(bold?.6:.55);     // prohlížeč bez canvasu: odhad
   measure.font=`${bold?700:400} ${size}px ${fontFam}`;return measure.measureText(t).width;};
 const altThr=(l,h)=>{
   let t=D.pv[l]-(+h.ubrat||0)+(+h.pridat||0),k=D.n[l];
@@ -892,6 +908,35 @@ function stripChart(x,W){
   const aria=`Hlasy ${ln} ${pl(ln,"kandidáta","kandidátů","kandidátů")} kandidátky ${D.abbr[l]||""} podle místa na lístku, `
     +`hranice pro přeskočení ${num1(thrOf(l))} ${hlasu(thrOf(l))}.`;
   return `<svg class="stchart" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(aria)}">${svg}${lab}</svg>`;
+}
+// Graf k obecnému střípku (graf.typ "velikost"): zvolení v posledních volbách podle velikosti obce.
+// Celý pruh jsou všichni zvolení ve skupině, červená část mandáty získané přeskočením, modrá
+// mandáty podle pořadí, takže je vidět „devět z deseti“ i to, kde se přeskakuje víc.
+const SIZE_GROUPS=[["všechny obce",0,NB-1],["do 500 obyvatel",0,1],["500–1 999",2,3],["2 000–4 999",4,4],
+  ["5 000–19 999",5,6],["20 000–49 999",7,7],["50 000 a víc",8,NB-1]];
+function sizeBars(){
+  const yi=META.years.length-1,el=new Float64Array(NB),ju=new Float64Array(NB);
+  for(let l=0;l<D.L;l++){
+    if(D.yr[l]!==yi||(ST&&ST[l]))continue;
+    const b=bandOf(D.pop[l]),o=D.off[l];
+    for(let i=0;i<D.n[l];i++){const ix=o+i;if(!bit(D.bEl,ix))continue;
+      el[b]++;if(!bit(D.bOr,ix)&&bit(D.bCl,ix))ju[b]++;}
+  }
+  const rows=SIZE_GROUPS.map(([lab,a,z],k)=>{
+    let e=0,j=0;for(let b=a;b<=z;b++){e+=el[b];j+=ju[b];}
+    const p=e?100*j/e:0;
+    const kde=k===0?"Ve všech obcích":a===0?"V obcích do 500 obyvatel":z===NB-1?"V obcích od 50 000 obyvatel"
+      :`V obcích s ${fmt.format(BANDS[a][0])} až ${fmt.format(BANDS[z][1]-1)} obyvateli`;
+    const tip=`${kde} získalo mandát přeskočením ${fmt.format(j)} z ${fmt.format(e)} zvolených (${pc(p)} %), `
+      +`ostatním ho přineslo pořadí na kandidátce (${pc(100-p)} %).`;
+    return `<div class="sb-row${k?"":" tot"}" data-tip="${esc(tip)}"><span class="sb-lab">${lab}</span>`
+      +`<span class="sb-trk"><i class="sb-j" style="width:${p.toFixed(2)}%"></i><i class="sb-o"></i>`
+      +`<b class="sb-v" style="left:${p.toFixed(2)}%">${pc(p)} %</b></span></div>`;
+  }).join("");
+  return `<div class="st-bars" role="img" aria-label="${esc(`Podíl zvolených, kteří v roce ${META.years[yi]} získali mandát přeskočením, podle velikosti obce.`)}">${rows}</div>`
+    +`<p class="st-key"><span><i class="k-sq k-hot"></i>mandát přeskočením</span>`
+    +`<span><i class="k-sq k-ord"></i>mandát podle pořadí na kandidátce</span>`
+    +`<span>zvolení zastupitelé ${META.years[yi]} podle počtu obyvatel obce</span></p>`;
 }
 // legenda pod grafem; čáry, body a podbarvení jsou tam i slovy
 function stripKey(x){
