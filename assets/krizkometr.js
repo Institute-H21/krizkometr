@@ -5,13 +5,15 @@
 // ------------------------------------------------------------- nastavení
 // VERZE: po každé výměně souborů v data/ ji změňte (a totéž číslo v odkazech
 // na skript a styly v HTML), jinak můžou prohlížeče chvíli držet stará data
-const VERZE="2026-10-10b";
+const VERZE="2026-10-11a";
 const ASSETS=new URL(".",(document.currentScript&&document.currentScript.src)||location.href);
 const DATA_URL=new URL("../data/",ASSETS);
 const SOUBORY={vysledky:"vysledky.bin",jmena:"jmena.bin",kandidatky:"kandidatky.bin"};
 // volby 2026 leží ve vlastních souborech (nastroje/prubezne2026.cs): během sčítání se
 // přepisuje jen vysledky-2026.bin, kandidátky a jména 2026 i data 2006–2022 zůstávají
 const SOUBORY26={vysledky:"vysledky-2026.bin",jmena:"jmena-2026.bin",kandidatky:"kandidatky-2026.bin"};
+// ručně psané střípky z voleb nahoře v grafech; popis polí je přímo v souboru
+const STRIPKY_SOUBOR="stripky.json";
 const VIEW=document.body.dataset.view||"vse";   // vse | pruzkumnik | grafy | kandidatka
 let META=null,D=null,anecOpen=false,searchRefresh=null,anecMode="weak",anecIdx=0,booted=false;
 // D0 = data 2006–2022; P26 = kde v D začíná rok 2026; LIVE = průběh sčítání;
@@ -669,6 +671,239 @@ function bandChart(B){
   });
   const c=$("bandChart");c.setAttribute("viewBox",`0 0 ${W} ${h}`);c.innerHTML=s;
 }
+
+/* ---------------------------------------------------------------- střípky */
+// Střípky z voleb: ručně psané zajímavosti z data/stripky.json nahoře v grafech, v pořadí ze
+// souboru. Střípek může mít případ (kandidátku, která se dá rozbalit se zvýrazněnými kandidáty),
+// graf té kandidátky z dat, obrázek a rámeček vedle textu. Bez případu není ani kandidátka, ani graf.
+let STRIPKY=[],stripIdx=0,stripOpen=false,stripSig="",stripD=null,stripW=0;
+async function loadStripky(){
+  try{const r=await fetch(new URL(STRIPKY_SOUBOR+"?v="+VERZE,DATA_URL),{cache:"no-cache"});
+    return r.ok?await r.json():null;}catch(e){return null;}
+}
+// kandidátka se dohledá podle roku, kódu zastupitelstva, obvodu, zkratky, počtu kandidátů
+// a případně součtu hlasů (dvě kandidátky SNK se stejným počtem kandidátů v jedné obci)
+function findCase(p){
+  const yi=META.years.indexOf(+p.rok);if(yi<0)return -1;
+  const hit=[];
+  for(let l=0;l<D.L;l++){
+    if(D.yr[l]!==yi)continue;const m=D.mi[l];
+    if(D.mcode[m]!==+p.kod||D.mward[m]!==(+p.obvod||1))continue;
+    if(p.zkratka!=null&&D.abbr[l]!==p.zkratka)continue;
+    if(p.kandidatu&&D.n[l]!==+p.kandidatu)continue;
+    if(p.hlasu&&D.pv[l]!==+p.hlasu)continue;
+    hit.push(l);
+  }
+  if(hit.length>1)console.warn("Křížkometr: ke střípku sedí víc kandidátek, beru první; pomůže pole hlasu",p);
+  return hit.length?hit[0]:-1;
+}
+function resolveStripky(j){
+  const arr=j&&Array.isArray(j.stripky)?j.stripky:[];
+  STRIPKY=arr.filter(s=>s&&typeof s.text==="string"&&s.text.trim()).map(s=>{
+    const p=s.pripad&&typeof s.pripad==="object"?s.pripad:null,l=p?findCase(p):-1,marks=new Set();
+    if(p&&l<0)console.warn("Křížkometr: kandidátka ke střípku se nenašla",p);
+    if(l>=0){const oz=(Array.isArray(p.oznacit)?p.oznacit:[]).map(Number);
+      for(let i=0;i<D.n[l];i++)if(oz.includes(D.pos[D.off[l]+i]))marks.add(D.off[l]+i);}
+    return {s,l,marks};
+  });
+}
+// pevné mezery: tisíce a procenta se neroztrhnou a jednopísmenné předložky a spojky nezůstanou
+// na konci řádku
+const NBSP=String.fromCharCode(160);
+const nbsp=s=>s.replace(/(\d) (?=\d{3}(?!\d)|%)/g,"$1"+NBSP).replace(/(?<=^|[\s(])([vkszouaiVKSZOUAI]) /g,"$1"+NBSP);
+// text ze souboru: prázdný řádek dělí odstavce, **tučně**, [odkaz](https://…)
+const inl=s=>nbsp(esc(String(s).trim())).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>")
+  .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+const paras=s=>String(s).trim().split(/\n\s*\n/).map(p=>`<p>${inl(p)}</p>`).join("");
+const stripTitle=(x,i)=>x.s.titulek||(x.l>=0?D.names[D.mi[x.l]]:`Střípek ${i+1}`);
+function stripWhere(l){
+  const ok=okrOf(D.mi[l]),y=D.yr[l];
+  return `${esc(D.names[D.mi[l]])} (${ok?"okres "+esc(ok)+", ":""}${fmt.format(D.pop[l])} obyvatel) · `
+    +(y===META.years.length-1?"":`volby ${META.years[y]} · `)+`kandidátka ${listName(l)}`;
+}
+function drawStripky(){
+  const box=$("stripky");if(!box)return;
+  if(!STRIPKY.length){box.hidden=true;return;}
+  if(stripIdx>=STRIPKY.length)stripIdx=0;
+  // překresluje se jen kvůli jinému střípku, nově načteným jménům a názvům nebo novým datům
+  const sig=`${stripIdx}|${!!NAMES}|${!!LISTS}`;
+  if(sig===stripSig&&stripD===D)return;
+  stripSig=sig;stripD=D;box.hidden=false;
+  const x=STRIPKY[stripIdx],{s,l,marks}=x,n=STRIPKY.length;
+  const nav=$("stripNav");
+  nav.innerHTML=n<2?"":STRIPKY.map((y,i)=>`<button type="button" class="chip" data-s="${i}" `
+    +`aria-pressed="${i===stripIdx}">${esc(stripTitle(y,i))}</button>`).join(" ");
+  // na telefonu jsou přepínače v jednom posuvném řádku: vybraný musí být vidět
+  const act=nav.querySelector('[aria-pressed="true"]');
+  if(act&&nav.scrollWidth>nav.clientWidth)nav.scrollLeft=Math.max(0,act.offsetLeft-14);
+  const aside=typeof s.ramecek==="string"&&s.ramecek.trim()?`<aside class="st-aside">${paras(s.ramecek)}</aside>`:"";
+  const img=s.obrazek&&typeof s.obrazek==="object"&&s.obrazek.soubor?s.obrazek:null;
+  let h=`<h3>${esc(stripTitle(x,stripIdx))}</h3>`+(l>=0?`<p class="st-where">${stripWhere(l)}</p>`:"")
+    +`<div class="st-cols${aside?"":" solo"}"><div class="st-text">${paras(s.text)}</div>${aside}</div>`;
+  if(l>=0&&s.graf)h+=`<figure class="st-fig"><div id="stripChart"></div>${stripKey(x)}`
+    +(s.graf.popisek?`<figcaption>${inl(s.graf.popisek)}</figcaption>`:"")+`</figure>`;
+  if(img)h+=`<figure class="st-fig"><img src="${esc(new URL(img.soubor,DATA_URL).href)}" alt="${esc(img.popis||"")}" loading="lazy">`
+    +(img.popisek?`<figcaption>${inl(img.popisek)}</figcaption>`:"")+`</figure>`;
+  if(l>=0)h+=`<details class="st-more" id="stripDet"${stripOpen?" open":""}><summary>Zobrazit celou kandidátku</summary>`
+    +`<div id="stripList"></div></details>`;
+  if(n>1){const k=(stripIdx+1)%n;
+    h+=`<div class="st-foot"><button type="button" class="st-next" data-s="${k}">Další střípek: ${esc(stripTitle(STRIPKY[k],k))} ›</button></div>`;}
+  $("stripBody").innerHTML=h;
+  stripW=0;drawStripChart();
+  const det=$("stripDet");
+  if(det){
+    const fill=()=>{$("stripList").innerHTML=listTable(l,marks);};
+    if(stripOpen)fill();
+    det.addEventListener("toggle",()=>{stripOpen=det.open;
+      if(det.open){ensureNames();if(!$("stripList").firstChild)fill();}postHeight();});
+  }
+  postHeight();
+}
+// graf se kreslí na šířku, kterou má; při změně šířky okna znovu, a jednou ještě po načtení
+// písma, protože podle jeho šířky se rozmisťují popisky
+let fontWait=false;
+function drawStripChart(){
+  const el=$("stripChart");if(!el)return;
+  const W=Math.floor(el.clientWidth);if(!W||W===stripW)return;
+  stripW=W;el.innerHTML=stripChart(STRIPKY[stripIdx],Math.max(260,W));
+  if(!fontWait&&document.fonts&&document.fonts.status!=="loaded"){fontWait=true;
+    document.fonts.ready.then(()=>{stripW=0;drawStripChart();});}
+}
+function setupStripky(){
+  const box=$("stripky");if(!box)return;
+  box.addEventListener("click",e=>{const b=e.target.closest("button[data-s]");if(!b)return;
+    const i=+b.dataset.s;if(i===stripIdx)return;
+    stripIdx=i;stripOpen=false;drawStripky();
+    // tlačítko je dole: nový střípek se čte od nadpisu
+    if(b.classList.contains("st-next"))$("stripNav").scrollIntoView({block:"nearest",behavior:"smooth"});});
+  let rq=0;
+  addEventListener("resize",()=>{if(!rq)rq=requestAnimationFrame(()=>{rq=0;drawStripChart();});});
+}
+// Graf kandidátky ke střípku: kandidáti v pořadí na lístku (vodorovně) a jejich hlasy (svisle).
+// Plný bod je zvolený, kroužek nezvolený, červeně kandidáti z textu (pripad.oznacit). Plná čára
+// je hranice pro přeskočení, čárkovaná hranice „co kdyby“ (graf.hranice: součet hlasů kandidátky
+// o ubrat nižší, nebo o pridat vyšší, případně kandidátka bez míst v bez), podbarvená jsou místa,
+// kam by mandáty připadly podle pořadí.
+let fontFam="",measure=null;
+const textW=(t,size,bold)=>{
+  if(!measure){measure=document.createElement("canvas").getContext("2d");
+    fontFam=getComputedStyle(document.body).fontFamily;}
+  measure.font=`${bold?700:400} ${size}px ${fontFam}`;return measure.measureText(t).width;};
+const altThr=(l,h)=>{
+  let t=D.pv[l]-(+h.ubrat||0)+(+h.pridat||0),k=D.n[l];
+  const bez=Array.isArray(h.bez)?h.bez.map(Number):[];
+  for(let i=0;i<D.n[l];i++)if(bez.includes(D.pos[D.off[l]+i])){t-=D.votes[D.off[l]+i];k--;}
+  const a=Math.floor(t/Math.max(1,k));return a+a/10;};
+const num1=v=>v.toLocaleString("cs-CZ",{maximumFractionDigits:1});
+const hlasu=v=>Number.isInteger(v)?hl(v):"hlasu";
+function stripChart(x,W){
+  const {s,l,marks}=x,o=D.off[l],ln=D.n[l],seats=Math.min(D.seats[l],ln),av=avgOf(l);
+  const hr=Array.isArray((s.graf||{}).hranice)?s.graf.hranice:[];
+  const lines=[{v:thrOf(l),main:true,tip:`Hranice pro přeskočení: ${num1(thrOf(l))} ${hlasu(thrOf(l))}. `
+      +(Number.isInteger(av)?`Průměr na kandidáta vyšel přesně ${num1(av)}, hranice je o desetinu vyšší.`
+        :`Průměr na kandidáta ${num1(av)} se zaokrouhlí dolů na celé hlasy a zvýší o desetinu.`)}]
+    .concat(hr.map(h=>{const v=altThr(l,h);
+      return {v,tip:`${h.popisek?h.popisek.charAt(0).toUpperCase()+h.popisek.slice(1):"Jiná hranice"}: ${num1(v)} ${hlasu(v)}.`};}));
+  const vs=Array.from(D.votes.subarray(o,o+ln)),lv=lines.map(z=>z.v);
+  let lo=Math.min(...vs,...lv),hi=Math.max(...vs,...lv);
+  if(hi-lo<2){lo-=1;hi+=1;}
+  // osa po „hezkých“ krocích, nejvýš pět dílků; body nesedí na okraji grafu
+  const raw=(hi-lo)/4,p10=Math.pow(10,Math.floor(Math.log10(raw)));
+  const step=[1,2,2.5,5,10].map(m=>m*p10).find(v=>v>=raw);
+  let y0=Math.floor(lo/step)*step,y1=Math.ceil(hi/step)*step;
+  if(lo-y0<step*.12)y0-=step;
+  if(y1-hi<step*.12)y1+=step;
+  y0=Math.max(0,y0);
+  const ticks=[];for(let k=0;y0+k*step<=y1+step/1e3;k++)ticks.push(Math.round((y0+k*step)*1e6)/1e6);
+  const FS=12,PH=W<560?180:210,padT=26,padB=42,padR=8;
+  const padL=Math.ceil(Math.max(...ticks.map(v=>textW(fmt.format(v),FS))))+12;
+  const H=padT+PH+padB,pw=W-padL-padR,cw=pw/ln;
+  const X=i=>padL+(i+.5)*cw,Y=v=>padT+PH*(1-(v-y0)/(y1-y0)),px=v=>Math.round(v)+.5;
+  let svg="";
+  if(seats)svg+=`<rect x="${padL}" y="${padT}" width="${(seats*cw).toFixed(1)}" height="${PH}" fill="var(--brand-soft)" fill-opacity=".7"/>`;
+  ticks.forEach(v=>{const y=px(Y(v));
+    svg+=`<line x1="${padL}" x2="${W-padR}" y1="${y}" y2="${y}" stroke="var(--rule)"/>`
+      +`<text x="${padL-8}" y="${(Y(v)+4).toFixed(1)}" text-anchor="end">${fmt.format(v)}</text>`;});
+  svg+=`<text x="${padL-8}" y="${padT-12}" text-anchor="end">hlasů</text>`;
+  // čísla míst: všechna, liché, nebo 1, 5, 10…, aby osa nebyla přeplněná; zvýraznění kandidáti vždy
+  const kx=cw>=22?1:[2,5,10,20].find(k=>k*cw>=36)||20,mk=new Set([...marks].map(ix=>ix-o));
+  for(let i=0;i<ln;i++){const p=i+1,reg=kx===2?p%2===1:(p===1||p%kx===0);
+    const show=mk.has(i)||(reg&&![...mk].some(j=>j!==i&&Math.abs(j-i)*cw<20));
+    if(show)svg+=`<text x="${X(i).toFixed(1)}" y="${padT+PH+16}" text-anchor="middle"${mk.has(i)?' class="lb" font-weight="700"':""}>${D.pos[o+i]}</text>`;}
+  svg+=`<text x="${(padL+pw/2).toFixed(1)}" y="${H-4}" text-anchor="middle">místo na kandidátce</text>`;
+  lines.forEach(z=>{const y=Y(z.v).toFixed(1);
+    svg+=`<line x1="${padL}" x2="${W-padR}" y1="${y}" y2="${y}" stroke="var(--ink)" stroke-width="1.5"${z.main?"":' stroke-dasharray="5 4"'}/>`;});
+  // body: nejdřív ostatní, navrch kandidáti z textu
+  const r0=Math.max(2.6,Math.min(5.5,cw*.32)),dots=[];
+  for(let i=0;i<ln;i++){const ix=o+i,m=marks.has(ix);
+    dots.push({i,ix,m,e:bit(D.bEl,ix),cx:X(i),cy:Y(D.votes[ix]),r:m?r0+1.5:r0});}
+  const dot=d=>`<circle cx="${d.cx.toFixed(1)}" cy="${d.cy.toFixed(1)}" r="${d.r}" `
+    +(d.e?`fill="var(${d.m?"--hot":"--brand"})" stroke="var(--bg)" stroke-width="1.5"`
+         :`fill="var(--bg)" stroke="var(${d.m?"--hot":"--ink-3"})" stroke-width="${d.m?2.5:1.5}"`)+`/>`;
+  svg+=dots.filter(d=>!d.m).map(dot).join("")+dots.filter(d=>d.m).map(dot).join("");
+  // najetí myší: na čáru hranice a na bod (ten má přednost), s plochou větší než samotná značka
+  lines.forEach(z=>{const y=Y(z.v).toFixed(1);
+    svg+=`<line x1="${padL}" x2="${W-padR}" y1="${y}" y2="${y}" stroke="transparent" stroke-width="9" data-tip="${esc(z.tip)}"/>`;});
+  const who=ix=>NAMES?NAMES.of(ix):"";
+  dots.forEach(d=>{const v=D.votes[d.ix],nm=who(d.ix);
+    svg+=`<circle cx="${d.cx.toFixed(1)}" cy="${d.cy.toFixed(1)}" r="${Math.max(9,cw/2).toFixed(1)}" fill="transparent" `
+      +`data-tip="${esc(`${D.pos[d.ix]}. ${nm?nm+" – ":"místo – "}${fmt.format(v)} ${hl(v)}, ${Math.round(100*v/Math.max(av,1e-9))} % průměru, `
+      +`${bit(D.bCl,d.ix)?"nad hranicí":"pod hranicí"}, ${d.e?"s mandátem":"bez mandátu"}`)}"/>`;});
+  // popisky: zkusí se několik míst a vybere to, které nejmíň zakrývá body, jiné popisky a okraj
+  const placed=[],ov=(a,b)=>Math.max(0,Math.min(a.x+a.w,b.x+b.w)-Math.max(a.x,b.x))
+    *Math.max(0,Math.min(a.y+a.h,b.y+b.h)-Math.max(a.y,b.y));
+  const place=(w,cands,self)=>{
+    let best=null,bs=Infinity;
+    cands.forEach((c,k)=>{
+      const b={x:c.a==="middle"?c.x-w/2:c.a==="end"?c.x-w:c.x,y:c.y-10,w,h:13};
+      let sc=k*3;
+      if(b.x<padL-4||b.x+b.w>W-1||b.y<1||b.y+b.h>padT+PH-1)sc+=1e6;
+      // kolem bodu pár pixelů volna, ať se na něj popisek nelepí
+      dots.forEach(d=>{if(d===self)return;
+        const a=ov(b,{x:d.cx-d.r-4,y:d.cy-d.r-2,w:2*d.r+8,h:2*d.r+4});if(a)sc+=60+a*3;});
+      placed.forEach(q=>{const a=ov(b,q);if(a)sc+=1e5+a;});
+      lines.forEach(z=>{const y=Y(z.v);if(!c.line&&y>b.y&&y<b.y+b.h)sc+=120;});
+      if(sc<bs){bs=sc;best=c;best.b=b;}
+    });
+    placed.push(best.b);return best;
+  };
+  let lab="";
+  // čáry hranic: číslo na pravém konci, kde překáží body, tak na levém nebo uprostřed;
+  // nejvyšší čára má popisek nad sebou, ostatní pod sebou
+  [...lines].sort((a,b)=>b.v-a.v).forEach((z,k)=>{
+    const y=Y(z.v),t=z.main?"hranice ":"",w=textW(t,FS)+textW(num1(z.v),FS,true);
+    const up={y:y-5},dn={y:y+14},at=[{x:W-padR-2,a:"end"},{x:padL+4,a:"start"}]
+      .concat([.75,.5,.25].map(f=>({x:padL+pw*f,a:"middle"})));
+    const side=(s)=>at.map(p=>({...p,...s,line:1}));
+    const c=place(w,k===0?side(up).concat(side(dn)):side(dn).concat(side(up)));
+    lab+=`<text class="lb halo" x="${c.x.toFixed(1)}" y="${c.y.toFixed(1)}" text-anchor="${c.a}">${t}<tspan font-weight="700">${num1(z.v)}</tspan></text>`;
+  });
+  // kandidáti z textu: příjmení a hlasy u bodu
+  dots.filter(d=>d.m).forEach(d=>{
+    const nm=NAMES?NAMES.sur[NAMES.si[d.ix]]:`${D.pos[d.ix]}. místo`,v=fmt.format(D.votes[d.ix]);
+    const w=textW(nm,12.5,true)+textW(" "+v,12.5),g=d.r+5;
+    const c=place(w,[{x:d.cx,y:d.cy-g,a:"middle"},{x:d.cx,y:d.cy+g+10,a:"middle"},
+      {x:d.cx+g,y:d.cy+4,a:"start"},{x:d.cx-g,y:d.cy+4,a:"end"},
+      {x:d.cx-6,y:d.cy-g,a:"start"},{x:d.cx+6,y:d.cy-g,a:"end"},
+      {x:d.cx-6,y:d.cy+g+10,a:"start"},{x:d.cx+6,y:d.cy+g+10,a:"end"}],d);
+    lab+=`<text class="lb halo" x="${c.x.toFixed(1)}" y="${c.y.toFixed(1)}" text-anchor="${c.a}">`
+      +`<tspan font-weight="700">${esc(nm)}</tspan> ${v}</text>`;
+  });
+  const aria=`Hlasy ${ln} ${pl(ln,"kandidáta","kandidátů","kandidátů")} kandidátky ${D.abbr[l]||""} podle místa na lístku, `
+    +`hranice pro přeskočení ${num1(thrOf(l))} ${hlasu(thrOf(l))}.`;
+  return `<svg class="stchart" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(aria)}">${svg}${lab}</svg>`;
+}
+// legenda pod grafem; čáry, body a podbarvení jsou tam i slovy
+function stripKey(x){
+  const {s,l,marks}=x,seats=Math.min(D.seats[l],D.n[l]);
+  const hr=Array.isArray((s.graf||{}).hranice)?s.graf.hranice:[];
+  const mist=seats===1?"první místo":seats<5?`první ${seats} místa`:`prvních ${seats} míst`;
+  return `<p class="st-key"><span><i class="k-el"></i>zvolen</span><span><i class="k-ne"></i>nezvolen</span>`
+    +(marks.size?`<span><i class="k-hot"></i>${marks.size===1?"kandidát z textu":"kandidáti z textu"}</span>`:"")
+    +`<span><i class="k-ln"></i>hranice pro přeskočení</span>`
+    +hr.map(h=>`<span><i class="k-ln k-da"></i>${esc(h.popisek||"jiná hranice")}</span>`).join("")
+    +(seats?`<span><i class="k-bd"></i>${mist}, kam by mandáty připadly podle pořadí na lístku</span>`:"")+`</p>`;
+}
 /* ----------------------------------------------------------------- render */
 // příklady se listují bez nového průchodu daty a bez překreslení teček nad nimi
 let EXS=[],RS=null,heroHtml="";
@@ -688,6 +923,7 @@ function drawExamples(){
 }
 function render(){
   if(!booted)return;
+  drawStripky();
   const head=$("head"),fun=$("fun"),band=$("bandChart");
   if(!head&&!fun&&!band){if(searchRefresh)searchRefresh();postHeight();return;}
   const {R,B,EX}=scan();
@@ -1089,23 +1325,27 @@ function boot(){
   paintAbs();paintRel();
   }
   if($("q"))setupSearch();
+  setupStripky();
   setupTips();
   booted=true;
   sync();render();
   addEventListener("resize",postHeight);
   if("ResizeObserver" in window)new ResizeObserver(()=>requestAnimationFrame(postHeight)).observe(document.documentElement);
   if(VIEW==="grafy")siblings({krizkometr:1,typ:"dotaz"});
-  if($("q")||$("head"))prefetchNames();
+  // jména jsou potřeba v hledání, v příkladech a v grafech a kandidátkách střípků
+  if($("q")||$("head")||(STRIPKY.length&&$("stripky")))prefetchNames();
   watchLive();
 }
 (async function(){
   try{
-    const [a,b]=await Promise.all([fetchBytes(SOUBORY.vysledky),
-      fetchBytes(SOUBORY26.vysledky,true).catch(()=>null)]);
+    // střípky jen tam, kde pro ně stránka má místo (grafy a celý nástroj)
+    const tpl=$("tpl"),wantS=!!(tpl&&tpl.content.getElementById("stripky"));
+    const [a,b,s]=await Promise.all([fetchBytes(SOUBORY.vysledky),
+      fetchBytes(SOUBORY26.vysledky,true).catch(()=>null),wantS?loadStripky():null]);
     D0=D=parse(a);META=D.meta;
     // bez dat 2026 (chybí, nebo nesedí) nástroj běží dál nad lety 2006–2022
     if(b)try{useLive(parse(b));}catch(e){D=D0;}
-    findSplits();countRivals();findUncounted();boot();
+    findSplits();countRivals();findUncounted();resolveStripky(s);boot();
   }catch(e){$("boot").innerHTML='<div class="empty">Data se nepodařilo načíst ('+esc(e&&e.message||e)
     +'). Stránka potřebuje Chrome, Edge, Firefox&nbsp;113+ nebo Safari&nbsp;16.4+.</div>';}
 })();

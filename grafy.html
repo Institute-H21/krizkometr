@@ -8,12 +8,20 @@
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="assets/favicon.ico" sizes="any">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
-<link rel="stylesheet" href="assets/krizkometr.css?v=2026-10-10b">
+<link rel="stylesheet" href="assets/krizkometr.css?v=2026-10-11a">
 </head>
 <body data-view="grafy">
 <div class="wrap">
 <div id="boot">Načítám data…</div>
 <template id="tpl">
+<section class="stripky box" id="stripky" hidden>
+  <div class="box-head">
+  <h2>Střípky z voleb 2026</h2>
+  <div class="chipwrap" id="stripNav" role="group" aria-label="Střípky"></div>
+  </div>
+  <div class="strip" id="stripBody"></div>
+</section>
+
 <p class="cutline" id="cut"></p>
 
 <section>
@@ -31,6 +39,6 @@
 <p class="src"><b>Zdroj dat:</b> otevřená data ČSÚ, volby do zastupitelstev obcí <span class="roky">2006–2022</span>. Přepočet Institut H21.</p>
 </template>
 </div>
-<script src="assets/krizkometr.js?v=2026-10-10b"></script>
+<script src="assets/krizkometr.js?v=2026-10-11a"></script>
 </body>
 </html>
