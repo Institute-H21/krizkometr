@@ -2,7 +2,7 @@
  "poznamka": "Střípky z voleb 2026 nahoře v grafech (grafy.html a index.html), v tomhle pořadí; první je vidět hned. titulek: krátký nadpis, je i na přepínači. text: prázdný řádek dělí odstavce, **takhle** se píše tučně, [takhle](https://…) odkaz. ramecek (nepovinný): rámeček vedle textu. pripad (nepovinný): kandidátka, které se střípek týká; dohledá se podle roku, kódu zastupitelstva (kod = KODZASTUP), obvodu, zkratky a počtu kandidátů, a kde to nestačí (dvě SNK se stejným počtem kandidátů), i podle součtu hlasů kandidátky (hlasu). oznacit jsou čísla míst, která se zvýrazní v tabulce i v grafu. Bez případu se kandidátka neukazuje. graf (nepovinný): u střípku s případem hlasy kandidátů kandidátky podle místa na lístku s hranicí pro přeskočení; u střípku bez případu jen {\"typ\": \"velikost\"}, tedy podíl zvolených přeskočením podle velikosti obce v posledních volbách; hranice přidá další čáru hranice pro součet hlasů kandidátky snížený o ubrat, zvýšený o pridat, nebo bez kandidátů z míst v bez; popisek je text do legendy. popisek grafu je věta pod ním. obrazek (nepovinný): soubor (cesta od složky data/ nebo celá adresa), popis (alternativní text), popisek (věta pod obrázkem).",
  "stripky": [
   {
-   "titulek": "Devět z deseti podle pořadí",
+   "titulek": "Devět z deseti podle strany",
    "text": "Pořadí určené stranami rozhodlo v devíti z deseti případů. Z nevolitelných pozic přeskočilo a získalo mandát jen 9,9 % nových zastupitelů. Málokdy se to stává ve velkých městech, která mají jen 5 procent skokanů. Nejnakloněnější přeskakování jsou menší města. V malých obcích často není možné, protože kandidátů je jen tolik, kolik členů zastupitelstva, případně si jsou zisky všech kandidátů příliš podobné a nikdo se nedostane přes potřebnou hranici pro přeskočení.",
    "ramecek": "Vyhoupnout se do čela kandidátky mohou níže umístěnému pomoct jen ti, kteří nevolí stranu jako celek, ale křížkují jednotlivá jména a vynechají přitom rivaly svého favorita. Čím zadnější pozice, tím více je to boj do kopce. Kdo volí celou kandidátku a přitom panašuje, s každým hlasem jinde se odebírá jeho hlas kandidátovi z konce kandidátky. Skákání z posledních míst je proto ve větších městech skoro vyloučeno.",
    "graf": {"typ": "velikost"}
@@ -36,7 +36,7 @@
    "graf": {"hranice": [{"pridat": 66, "popisek": "hranice, kdyby ostatní kandidáti dostali o 66 hlasů víc"}]}
   },
   {
-   "titulek": "Vyhrály zájmy strany",
+   "titulek": "Strana vyhrála nad kandidáty",
    "text": "V Praze-Petrovicích zvítězily zájmy strany nad přeskočením oblíbenější kandidátky. Lence Kotačkové ze sedmého místa chybělo jen 4,4 hlasu k tomu, aby přeskočila na druhé místo a stala se zastupitelkou. Kdyby se našlo pět lidí, kteří by místo celé kandidátky zakřížkovali jen ji, mandát by získala. Celá kandidátka Žijeme Petrovice by ale oslabila, protože čtvrtý mandát by připadl konkurenci.",
    "ramecek": "Lidé se silnou preferencí pro stranu i pro konkrétního kandidáta či kandidáty v rámci ní si musí v komunálních volbách vybrat, co je pro ně důležitější. Své straně nejvíce pomohou, pokud dají hlas všem. Pak už ale nemohou vyjádřit preferenci mezi jednotlivými kandidáty, jako třeba ve volbách do Poslanecké sněmovny. Kandidátovi nejvíce pomohou, pokud hlasují jen pro něj a v rámci jeho strany pro nikoho dalšího. Kdyby to tak ale udělalo hodně lidí, strana by se vůbec nedostala ke křeslům.",
    "pripad": {"rok": 2026, "kod": 547395, "obvod": 1, "zkratka": "Piráti+NK", "kandidatu": 15, "oznacit": [7]},
